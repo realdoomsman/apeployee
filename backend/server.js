@@ -571,6 +571,8 @@ app.get('/api/stats', async (_req, res) => {
 // consumeCredits: how many credits this payout burns (payday caps burn only the
 // proportional part, so a capped worker keeps weight for future cycles).
 async function executePayout(user, poolShare = null, consumeCredits = null) {
+  // Master kill switch — blocks ALL SOL outflow (manual and payday) instantly.
+  if (process.env.PAYOUTS_FROZEN === 'true') return { error: 'payroll is temporarily paused by management — wages keep accruing' };
   const credits = consumeCredits != null
     ? Math.max(1, Math.min(Math.round(consumeCredits), Math.round(user.balance)))
     : Math.round(user.balance);
@@ -724,7 +726,7 @@ cron.schedule('*/3 * * * *', guarded(async () => {
 // The vault doesn't accumulate — fees flow straight through to the workforce.
 // Tunables: VAULT_RESERVE_SOL (default 0.1), PAYDAY_POOL_PCT (default 100).
 cron.schedule('*/10 * * * *', guarded(async () => {
-  if (process.env.AUTOPAY !== 'true' || !solana.isLive()) return;
+  if (process.env.AUTOPAY !== 'true' || process.env.PAYOUTS_FROZEN === 'true' || !solana.isLive()) return;
   const workers = await prisma.user.findMany({ where: { balance: { gt: 0 }, payoutAddress: { not: null }, xVerified: true } });
   if (!workers.length) {
     const earners = await prisma.user.count({ where: { balance: { gt: 0 } } });
@@ -735,38 +737,62 @@ cron.schedule('*/10 * * * *', guarded(async () => {
   let vaultBal;
   try { vaultBal = await solana.getVaultBalance(); } catch { return; }
   const RESERVE = Math.round(Number(process.env.VAULT_RESERVE_SOL || 0.1) * 1e9);
-  const PCT = Math.min(100, Math.max(0, Number(process.env.PAYDAY_POOL_PCT || 100))) / 100;
-  const pool = Math.max(0, Math.round((vaultBal - RESERVE) * PCT));
+  const pool = Math.max(0, vaultBal - RESERVE);
   if (pool < MIN_PAYOUT_LAMPORTS) return;
 
-  // Weight = wage credits × currently worn boost (re-validated at payday).
-  const weighted = [];
-  for (const u of workers) {
-    const boost = await nft.refreshBoost(prisma, u.id);
-    weighted.push({ u, w: Math.round(u.balance) * boost });
-  }
-  const totalW = weighted.reduce((s, x) => s + x.w, 0);
-  if (totalW <= 0) return;
-
-  // Fairness caps — no single worker can drain the pool. Anything capped stays
-  // in the vault for future cycles; the worker keeps the unspent credit weight.
-  const MAXPCT = Math.min(100, Math.max(1, Number(process.env.PAYDAY_MAX_SHARE_PCT || 25))) / 100;
-  const MAXCYCLE = Math.round(Number(process.env.PAYDAY_MAX_SOL || 0.25) * 1e9);
-  const DAILYMAX = Math.round(Number(process.env.PAYDAY_DAILY_MAX_SOL || 0.75) * 1e9);
+  // MERIT ceilings — how much one worker may take scales with work done:
+  //   dailyCap = BASE + PER_SHIFT × verified shifts   (clamped at MAX_DAILY)
+  // spent at most a third per cycle. Excess WATERFALLS to workers with headroom
+  // left, so the whole pool flows whenever anyone has earned room for it; only
+  // when everyone is at their ceiling does the remainder roll to the next cycle.
+  const BASE_DAILY = Math.round(Number(process.env.PAYDAY_DAILY_BASE_SOL || 0.25) * 1e9);
+  const PER_SHIFT = Math.round(Number(process.env.PAYDAY_DAILY_PER_SHIFT_SOL || 0.05) * 1e9);
+  const MAX_DAILY = Math.round(Number(process.env.PAYDAY_DAILY_MAX_SOL || 2) * 1e9);
   const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
 
-  console.log(`[payday] pool ${(pool / 1e9).toFixed(4)} SOL across ${workers.length} worker(s)`);
-  for (const { u, w } of weighted) {
-    const uncapped = Math.floor(pool * (w / totalW));
+  // Weight = wage credits × currently worn boost (re-validated at payday).
+  const entries = [];
+  for (const u of workers) {
+    const boost = await nft.refreshBoost(prisma, u.id);
     const paidToday = Math.round((await prisma.payment.aggregate({
       _sum: { amount: true },
       where: { userId: u.id, status: { in: ['COMPLETED', 'PENDING'] }, createdAt: { gte: dayStart } },
     }))._sum.amount || 0);
-    const share = Math.min(uncapped, Math.floor(pool * MAXPCT), MAXCYCLE, Math.max(0, DAILYMAX - paidToday));
-    if (share < MIN_PAYOUT_LAMPORTS) continue; // dust/capped-out rolls over — credits are kept
-    const consume = Math.ceil(Math.round(u.balance) * (share / uncapped));
-    const r = await executePayout(u, share, consume);
-    if (r.error) console.error(`[payday] @${u.xUsername}: ${r.error}`);
+    const dailyCap = Math.min(MAX_DAILY, BASE_DAILY + PER_SHIFT * u.totalShills);
+    const headroom = Math.max(0, Math.min(Math.ceil(dailyCap / 3), dailyCap - paidToday));
+    entries.push({ u, w: Math.round(u.balance) * boost, headroom, alloc: 0 });
+  }
+  const totalW0 = entries.reduce((s, e) => s + e.w, 0);
+  if (totalW0 <= 0) return;
+
+  // Waterfall: proportional rounds capped by headroom; excess re-splits among
+  // workers who still have room until the pool is spent or everyone is capped.
+  let remaining = pool;
+  let active = entries.filter((e) => e.w > 0 && e.headroom > 0);
+  for (let round = 0; round < 4 && active.length && remaining >= MIN_PAYOUT_LAMPORTS; round++) {
+    const totalW = active.reduce((s, e) => s + e.w, 0);
+    const roundPool = remaining;
+    let given = 0;
+    const open = [];
+    for (const e of active) {
+      const want = Math.floor(roundPool * (e.w / totalW));
+      const got = Math.min(want, e.headroom);
+      e.alloc += got; e.headroom -= got; given += got;
+      if (e.headroom > 0) open.push(e);
+    }
+    remaining -= given;
+    if (given === 0) break;
+    active = open;
+  }
+
+  console.log(`[payday] pool ${(pool / 1e9).toFixed(4)} SOL, ${workers.length} worker(s) — paying ${((pool - remaining) / 1e9).toFixed(4)}, rolling ${(remaining / 1e9).toFixed(4)}`);
+  for (const e of entries) {
+    if (e.alloc < MIN_PAYOUT_LAMPORTS) continue; // dust/capped-out rolls over — credits are kept
+    // Burn only the share of credits actually converted (capped workers keep weight).
+    const fair = Math.floor(pool * (e.w / totalW0)) || e.alloc;
+    const consume = Math.ceil(Math.round(e.u.balance) * Math.min(1, e.alloc / fair));
+    const r = await executePayout(e.u, e.alloc, consume);
+    if (r.error) console.error(`[payday] @${e.u.xUsername}: ${r.error}`);
   }
 }));
 
