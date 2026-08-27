@@ -37,6 +37,11 @@ if (!JWT_SECRET) { console.error('FATAL: JWT_SECRET must be set in production');
 let mint = { enabled: () => false };
 try { mint = require('./services/mint'); } catch { /* metaplex not installed/configured */ }
 
+// Pending X-ownership verifications: verifyId -> { handle, code, expires }.
+const crypto = require('crypto');
+const pendingVerify = new Map();
+setInterval(() => { const now = Date.now(); for (const [k, v] of pendingVerify) if (v.expires < now) pendingVerify.delete(k); }, 60_000).unref();
+
 // Same-origin in production (frontend served by this server) → no CORS needed.
 // In dev the Vite proxy also makes it same-origin, but allow the dev origin too.
 app.use(cors({ origin: PROD ? true : [FRONTEND_URL], credentials: true }));
@@ -114,8 +119,11 @@ const RANKS = [
 const rankFor = (shills) => [...RANKS].reverse().find((r) => shills >= r.shills);
 const rankInfo = (name) => RANKS.find((r) => r.name === name) || RANKS[0];
 
-// like 10_000 lamports, retweet 20_000, reply 5_000, view 100.
-const metricsToLamports = (m) => m.likes * 10_000 + m.retweets * 20_000 + m.replies * 5_000 + m.views * 100;
+// Base 100_000 lamports (0.0001 SOL) per verified qualifying post so a fresh tweet
+// pays something immediately; engagement adds on and is topped up as it grows.
+// like 10_000, retweet 20_000, reply 5_000, view 100.
+const BASE_PER_POST = 100_000;
+const metricsToLamports = (m) => BASE_PER_POST + m.likes * 10_000 + m.retweets * 20_000 + m.replies * 5_000 + m.views * 100;
 
 function publicUser(u, extra = {}) {
   const rank = rankInfo(u.apeRank);
@@ -159,8 +167,7 @@ app.get('/api/status', (_req, res) => {
   res.json({
     app: TOKEN_NAME,
     ticker: TICKER,
-    xMode: twitter.oauthLive() ? 'live' : 'demo',
-    xRead: twitter.readLive() ? 'live' : 'simulated',
+    xMode: twitter.oauthLive() ? 'oauth' : 'verify', // real either way; 'verify' = post-a-code
     payoutMode: solana.isLive() ? 'live' : 'simulated',
     mintMode: mint.enabled() ? 'live' : 'off',
     feeMode: pumpfun.enabled() ? 'live' : 'off',
@@ -171,14 +178,56 @@ app.get('/api/status', (_req, res) => {
   });
 });
 
-// ---------- auth ----------
-app.post('/api/auth/demo', async (req, res) => {
-  if (twitter.oauthLive()) return res.status(400).json({ error: 'X sign-in is enabled — use /api/auth/x/start' });
+// ---------- auth: real X ownership via proof-of-post ----------
+// Step 1 — begin: user says which handle, we hand back a one-time code to post.
+app.post('/api/auth/verify/begin', (req, res) => {
   const handle = String(req.body.handle || '').replace(/^@/, '').trim();
-  if (!/^[A-Za-z0-9_]{2,15}$/.test(handle)) return res.status(400).json({ error: 'that does not look like an X handle' });
-  const user = await prisma.user.upsert({ where: { xUsername: handle }, update: {}, create: { xUsername: handle, demo: true } });
-  setSession(res, user.id);
-  res.json({ user: await meResponse(user.id) });
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return res.status(400).json({ error: 'that does not look like an X handle' });
+  const code = `APE-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  const verifyId = crypto.randomBytes(16).toString('hex');
+  pendingVerify.set(verifyId, { handle, code, expires: Date.now() + 15 * 60_000 });
+  const tweetText = `Clocking in at APEPLOYEE 🦍 verifying my account for work. ${code}\n\napeployee.fun ${TICKER}`;
+  res.json({ verifyId, code, handle, tweetText, intent: `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}` });
+});
+
+// Step 2 — confirm: user pastes the tweet URL; we read it back publicly and check
+// the author handle + the code. Only the real account owner can pass this.
+app.post('/api/auth/verify/confirm', async (req, res) => {
+  try {
+    const entry = pendingVerify.get(String(req.body.verifyId || ''));
+    if (!entry) return res.status(400).json({ error: 'verification expired — start again' });
+    const raw = String(req.body.url || '').trim();
+    const m = raw.match(TWEET_URL) || raw.match(/^(\d{5,25})$/);
+    if (!m) return res.status(400).json({ error: 'paste the link to the tweet you just posted' });
+
+    let tweet;
+    try { tweet = await twitter.fetchTweetPublic(m[1]); }
+    catch (e) { return res.status(502).json({ error: `could not read that tweet on X (${e.message}) — give it a few seconds and retry` }); }
+
+    if (tweet.authorHandle.toLowerCase() !== entry.handle.toLowerCase()) {
+      return res.status(400).json({ error: `that tweet is from @${tweet.authorHandle}, not @${entry.handle}` });
+    }
+    if (!tweet.text.includes(entry.code)) {
+      return res.status(400).json({ error: `the tweet must contain your code ${entry.code}` });
+    }
+    pendingVerify.delete(String(req.body.verifyId));
+
+    // Key the account by the numeric X id. If the handle was held by another row
+    // (e.g. a renamed account), free it so the verified owner takes it.
+    let user = await prisma.user.findUnique({ where: { xId: tweet.authorId } });
+    if (!user) {
+      const clash = await prisma.user.findUnique({ where: { xUsername: tweet.authorHandle } });
+      if (clash) await prisma.user.update({ where: { id: clash.id }, data: { xUsername: `${tweet.authorHandle}~old-${clash.id.slice(-5)}` } });
+      user = await prisma.user.create({ data: { xId: tweet.authorId, xUsername: tweet.authorHandle, xVerified: true } });
+    } else if (!user.xVerified || user.xUsername !== tweet.authorHandle) {
+      user = await prisma.user.update({ where: { id: user.id }, data: { xVerified: true, xUsername: tweet.authorHandle } });
+    }
+    setSession(res, user.id);
+    res.json({ user: await meResponse(user.id) });
+  } catch (e) {
+    console.error('[verify]', e);
+    res.status(500).json({ error: 'verification failed — try again' });
+  }
 });
 
 app.get('/api/auth/x/start', (req, res) => {
@@ -292,21 +341,19 @@ app.post('/api/shills', requireAuth, async (req, res) => {
     const todayCount = await prisma.shillRecord.count({ where: { userId: req.user.id, createdAt: { gte: today } } });
     if (todayCount >= DAILY_SHILL_CAP) return res.status(429).json({ error: `daily cap reached (${DAILY_SHILL_CAP}) — even apes need rest` });
 
-    let metrics, text, simulated;
-    if (twitter.readLive()) {
-      const tweet = await twitter.fetchTweet(tweetId);
-      if (req.user.xVerified && tweet.authorId !== req.user.xId) {
-        return res.status(400).json({ error: 'that post is not from your X account — shill with your own posts' });
-      }
-      if (!tweet.text.toUpperCase().includes(TICKER.toUpperCase())) {
-        return res.status(400).json({ error: `the post has to mention ${TICKER} — that is the whole job` });
-      }
-      metrics = tweet; text = tweet.text; simulated = false;
-    } else {
-      metrics = twitter.demoMetrics(tweetId, 0);
-      text = `Bringing new money to ${TICKER}. Everybody eats.`;
-      simulated = true;
+    if (!req.user.xVerified || !req.user.xId) {
+      return res.status(400).json({ error: 'verify your X account first' });
     }
+    let tweet;
+    try { tweet = await twitter.fetchTweetPublic(tweetId); }
+    catch (e) { return res.status(502).json({ error: `could not read that post on X (${e.message}) — retry in a moment` }); }
+    if (tweet.authorId !== req.user.xId) {
+      return res.status(400).json({ error: 'that post is not from your X account — shill with your own posts' });
+    }
+    if (!tweet.text.toUpperCase().includes(TICKER.toUpperCase()) && !tweet.text.toUpperCase().includes(TICKER.replace('$', '').toUpperCase())) {
+      return res.status(400).json({ error: `the post has to mention ${TICKER} — that is the whole job` });
+    }
+    const metrics = tweet; const text = tweet.text; const simulated = false;
 
     // Recompute the worn-pass boost right now so a stale nftBoost can never pay a
     // boost without an equipped pass (enforces "must wear to earn the boost").
@@ -433,7 +480,7 @@ async function executePayout(user) {
   const amount = Math.round(user.balance);
   if (amount < MIN_PAYOUT_LAMPORTS) return { error: `minimum payout is ${MIN_PAYOUT_LAMPORTS / 1e9} SOL` };
   // Real X verification is required to get paid (blocks handle-squatting for wages).
-  if (twitter.oauthLive() && !user.xVerified) return { error: 'connect your X account to get paid (Profile → Connect X)' };
+  if (!user.xVerified) return { error: 'verify your X account to get paid' };
   if (!user.payoutAddress) return { error: 'set a payout address first (Profile → payout address)' };
 
   // Reserve atomically so concurrent requests can't double-pay.
@@ -515,10 +562,7 @@ cron.schedule('*/10 * * * *', async () => {
   const shills = await prisma.shillRecord.findMany({ where: { createdAt: { gte: cutoff }, lastPolledAt: { lte: stale } }, take: 50 });
   for (const s of shills) {
     try {
-      let m;
-      if (s.simulated) m = twitter.demoMetrics(s.tweetId, (Date.now() - s.createdAt.getTime()) / 60_000);
-      else if (twitter.readLive()) m = await twitter.fetchTweet(s.tweetId);
-      else continue;
+      const m = await twitter.fetchTweetPublic(s.tweetId);
       const total = Math.round(metricsToLamports(m) * s.mult); // frozen multiplier — no windfall
       const delta = Math.max(0, total - Math.round(s.earned));
       await prisma.$transaction([
@@ -583,5 +627,5 @@ if (fs.existsSync(DIST)) {
 
 app.listen(PORT, () => {
   console.log(`🦍 APEPLOYEE API on :${PORT} (${CLUSTER})`);
-  console.log(`   X: ${twitter.oauthLive() ? 'LIVE' : 'DEMO'} · reads ${twitter.readLive() ? 'LIVE' : 'SIM'} · payouts ${solana.isLive() ? 'LIVE' : 'SIM'} · mint ${mint.enabled() ? 'LIVE' : 'off'} · fees ${pumpfun.enabled() ? 'LIVE' : 'off'}`);
+  console.log(`   X verify: proof-of-post (public) · oauth ${twitter.oauthLive() ? 'on' : 'off'} · payouts ${solana.isLive() ? 'LIVE' : 'SIM'} · mint ${mint.enabled() ? 'LIVE' : 'off'} · fees ${pumpfun.enabled() ? 'LIVE' : 'off'}`);
 });

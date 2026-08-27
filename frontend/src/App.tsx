@@ -329,50 +329,84 @@ export default function App() {
   );
 }
 
+interface BeginResp { verifyId: string; code: string; handle: string; tweetText: string; intent: string }
+
 function SignIn({ status, onClose, onAuthed }: { status: Status; onClose: () => void; onAuthed: (me: Me) => void }) {
+  const [step, setStep] = useState<1 | 2>(1);
   const [handle, setHandle] = useState('');
+  const [begun, setBegun] = useState<BeginResp | null>(null);
+  const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const submit = async () => {
+  const begin = async () => {
     setBusy(true); setError('');
     try {
-      const { user } = await api<{ user: Me }>('/api/auth/demo', { method: 'POST', body: JSON.stringify({ handle }) });
+      const r = await api<BeginResp>('/api/auth/verify/begin', { method: 'POST', body: JSON.stringify({ handle }) });
+      setBegun(r); setStep(2);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+
+  const confirm = async () => {
+    if (!begun) return;
+    setBusy(true); setError('');
+    try {
+      const { user } = await api<{ user: Me }>('/api/auth/verify/confirm', { method: 'POST', body: JSON.stringify({ verifyId: begun.verifyId, url }) });
       onAuthed(user);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
 
   return (
     <Modal onClose={onClose}>
       <div className="window overflow-hidden">
-        <div className="titlebar">CLOCK_IN.EXE<span className="titlebar-btns"><button className="titlebar-btn titlebar-btn-close" onClick={onClose} /></span></div>
+        <div className="titlebar">VERIFY_X.EXE — Prove it's you<span className="titlebar-btns"><button className="titlebar-btn titlebar-btn-close" onClick={onClose} /></span></div>
         <div className="p-5 space-y-4 bg-paper">
-          <p className="text-sm text-ink-soft">
-            Your X account is your employee ID. <b className="text-ink">No wallet ever connects</b> —
-            you paste a payout address later, and that is the only wallet detail the office touches.
-          </p>
-          {status.xMode === 'live' ? (
-            <a className="btn-xp w-full" href="/api/auth/x/start">Continue with X</a>
-          ) : (
+          {status.xMode === 'oauth' && step === 1 && (
+            <a className="btn-xp w-full" href="/api/auth/x/start">Continue with X (one click)</a>
+          )}
+
+          {step === 1 && (
             <div className="space-y-2">
+              <p className="text-sm text-ink-soft">
+                Your X account is your employee ID. We verify you really own it by having you
+                post a one-time code — <b className="text-ink">no wallet connects, no passwords, no X login</b>.
+              </p>
+              <label className="label">Your X handle</label>
               <div className="flex gap-2">
-                <input
-                  className="input font-mono" placeholder="@yourhandle" value={handle} autoFocus
+                <input className="input font-mono" placeholder="@yourhandle" value={handle} autoFocus
                   onChange={(e) => setHandle(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handle && !busy && submit()}
-                />
-                <button className="btn-xp shrink-0" onClick={submit} disabled={busy || !handle}>
-                  {busy ? <Spinner light /> : 'Clock in'}
+                  onKeyDown={(e) => e.key === 'Enter' && handle && !busy && begin()} />
+                <button className="btn-xp shrink-0" onClick={begin} disabled={busy || !handle}>
+                  {busy ? <Spinner light /> : 'Next'}
                 </button>
               </div>
               {error && <div className="text-stampred text-sm">{error}</div>}
-              <div className="label">X account verification activates at launch.</div>
             </div>
           )}
+
+          {step === 2 && begun && (
+            <div className="space-y-3">
+              <div className="sunken p-3 space-y-1">
+                <div className="label">Step 1 — post this from @{begun.handle}</div>
+                <div className="font-mono text-xs bg-paper-panel border border-line p-2 rounded-sm select-all">{begun.tweetText}</div>
+                <a className="btn-xp w-full mt-1" href={begun.intent} target="_blank" rel="noreferrer">Open X to post it →</a>
+              </div>
+              <div className="space-y-1.5">
+                <div className="label">Step 2 — paste the link to that post</div>
+                <div className="flex gap-2">
+                  <input className="input font-mono text-xs" placeholder="https://x.com/…/status/…" value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && url && !busy && confirm()} />
+                  <button className="btn-green shrink-0" onClick={confirm} disabled={busy || !url}>
+                    {busy ? <Spinner light /> : 'Verify'}
+                  </button>
+                </div>
+              </div>
+              {error && <div className="text-stampred text-sm">{error}</div>}
+              <button className="label hover:text-ink" onClick={() => { setStep(1); setError(''); }}>← use a different handle</button>
+            </div>
+          )}
+
           <button className="btn-ink w-full" onClick={onClose}>Just browsing</button>
         </div>
       </div>

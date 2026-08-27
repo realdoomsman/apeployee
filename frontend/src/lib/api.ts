@@ -2,7 +2,8 @@
 
 export interface Status {
   app: string; ticker: string;
-  xMode: 'live' | 'demo'; xRead: 'live' | 'simulated'; payoutMode: 'live' | 'simulated';
+  xMode: 'verify' | 'oauth'; payoutMode: 'live' | 'simulated';
+  mintMode?: string; feeMode?: string; cluster?: string;
   autopay: boolean; mineEvery: number; dailyShillCap: number;
 }
 export interface Rank { name: string; label: string; emoji: string; shills: number; mult: number }
