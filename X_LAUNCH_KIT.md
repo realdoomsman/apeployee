@@ -126,11 +126,9 @@ the post: the 3-step flow, the pass tiers, and the no-wallet badge in one image.
 
 ### Post 7 — LAUNCH DAY (attach `teaser-hiring.png`, pin it, reply with the CA alone)
 
-⚠ Replace [CA] with the contract address, then double-check it still fits (~266 chars).
-
 > $APEPLOYEE is live on pump.fun.
 >
-> CA: [CA]
+> CA: bK7fzA4srABQ3qjNdTpYytYENeV71YLFGwRaf7opump
 >
 > go to apeployee.fun, take a job, post about it in your own words. auto-verified, paid in real SOL from creator fees. no wallet connect — X login only.
 >

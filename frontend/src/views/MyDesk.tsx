@@ -12,6 +12,7 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
   const [address, setAddress] = useState(me.payoutAddress || '');
   const [saving, setSaving] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const loadPasses = () => api<{ passes: Pass[] }>('/api/passes').then((r) => setPasses(r.passes)).catch(() => setPasses([]));
   useEffect(() => {
@@ -43,6 +44,19 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
       toast((e as Error).message, 'bad');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const syncWallet = async () => {
+    setSyncing(true);
+    try {
+      const r = await api<{ synced: number }>('/api/me/sync', { method: 'POST', body: JSON.stringify({}) });
+      await Promise.all([refreshMe(), loadPasses()]);
+      toast(r.synced > 0 ? `Synced — ${r.synced} pass${r.synced === 1 ? '' : 'es'} claimed from your wallet.` : 'Wallet checked — no new passes found.');
+    } catch (e) {
+      toast((e as Error).message, 'bad');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -115,8 +129,12 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
           <div className="flex gap-2 flex-wrap">
             <input className="input font-mono text-xs flex-1 min-w-52" placeholder="your Solana address" value={address} onChange={(e) => setAddress(e.target.value)} />
             <button className="btn-ink" onClick={saveAddress} disabled={saving}>{saving ? <Spinner /> : 'File address'}</button>
+            <button className="btn-line" onClick={syncWallet} disabled={syncing || !me.payoutAddress} title={!me.payoutAddress ? 'File a payout address first' : 'Check the chain for passes this wallet holds'}>
+              {syncing ? <Spinner /> : 'Sync wallet'}
+            </button>
           </div>
           <div className="label">Minimum payout 0.005 SOL{status.autopay ? ' · auto-pay runs daily' : ''}{status.payoutMode !== 'live' ? ' · settles on-chain at launch' : ''}</div>
+          <div className="label">Bought a Worker Pass on Magic Eden or Tensor? File that wallet above, hit Sync — the pass and its boost become yours.</div>
         </div>
       </Section>
 

@@ -5,6 +5,7 @@ export interface Status {
   xMode: 'verify' | 'oauth'; payoutMode: 'live' | 'simulated';
   mintMode?: string; feeMode?: string; cluster?: string;
   autopay: boolean; mineEvery: number; dailyShillCap: number;
+  tokenMint?: string | null;
 }
 export interface Rank { name: string; label: string; emoji: string; shills: number; mult: number }
 export type TierName = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';

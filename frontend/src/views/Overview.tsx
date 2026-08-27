@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, BadgeCheck, ExternalLink, FileText, Pickaxe, Banknote } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Copy, ExternalLink, FileText, Pickaxe, Banknote } from 'lucide-react';
 import type { AppCtx } from '../App';
 import { api, compact, sol, when } from '../lib/api';
 import type { Feed, Stats } from '../lib/api';
@@ -12,14 +12,37 @@ const img = (id: number) => `/nft/images/${String(id).padStart(3, '0')}.png`;
 export default function Overview({ me, status, setView, openSignIn }: AppCtx) {
   const [feed, setFeed] = useState<Feed | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     api<Feed>('/api/feed').then(setFeed).catch(() => {});
     api<Stats>('/api/stats').then(setStats).catch(() => {});
   }, []);
 
+  const copyCA = async () => {
+    if (!status.tokenMint) return;
+    try {
+      await navigator.clipboard.writeText(status.tokenMint);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch { /* clipboard blocked — the address is selectable */ }
+  };
+
   return (
     <div className="space-y-8">
+      {/* token strip — CA + market links (shown once the token is live) */}
+      {status.tokenMint && (
+        <div className="panel px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <span className="font-display uppercase text-xs text-green">{status.ticker} live</span>
+          <span className="font-mono text-[11px] break-all select-all">{status.tokenMint}</span>
+          <button className="label hover:text-ink inline-flex items-center gap-1" onClick={copyCA}>
+            <Copy size={11} /> {copied ? 'copied' : 'copy CA'}
+          </button>
+          <a className="label text-green hover:underline inline-flex items-center gap-1" href={`https://pump.fun/coin/${status.tokenMint}`} target="_blank" rel="noreferrer">pump.fun <ExternalLink size={10} /></a>
+          <a className="label text-green hover:underline inline-flex items-center gap-1" href={`https://dexscreener.com/solana/${status.tokenMint}`} target="_blank" rel="noreferrer">chart <ExternalLink size={10} /></a>
+        </div>
+      )}
+
       {/* ticker strip */}
       <div className="panel px-4 py-2 flex flex-wrap gap-x-8 gap-y-1 font-mono text-[11px] uppercase tracking-wider">
         <span>Wages paid <b>{stats ? sol(stats.totalPaid, 2) : '—'}</b></span>

@@ -12,6 +12,7 @@ const { PrismaClient } = require('@prisma/client');
 const twitter = require('./services/twitter');
 const solana = require('./services/solana');
 const nft = require('./services/nft');
+const das = require('./services/das');
 const pumpfun = require('./services/pumpfun');
 
 const prisma = new PrismaClient();
@@ -175,6 +176,7 @@ app.get('/api/status', (_req, res) => {
     mineEvery: nft.MINE_EVERY,
     dailyShillCap: DAILY_SHILL_CAP,
     cluster: CLUSTER,
+    tokenMint: pumpfun.mint || null,
   });
 });
 
@@ -278,13 +280,70 @@ app.put('/api/me/payout', requireAuth, async (req, res) => {
   const address = String(req.body.address || '').trim();
   if (address && !solana.isValidAddress(address)) return res.status(400).json({ error: 'not a valid Solana address' });
   await prisma.user.update({ where: { id: req.user.id }, data: { payoutAddress: address || null } });
+  // Pull in any passes this wallet already holds on-chain (e.g. bought on Magic Eden).
+  if (address) await syncPasses(req.user.id).catch((e) => console.error('[das] payout sync:', e.message));
   res.json({ user: await meResponse(req.user.id) });
 });
 
+// On-chain ownership sync: any minted pass HELD by this worker's payout wallet
+// becomes theirs in-app (marketplace buys carry the boost); whoever was wearing
+// it before loses the equip. DB-only passes (not yet minted) are untouched.
+async function syncPasses(userId) {
+  if (!das.enabled()) return { synced: 0 };
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !user.payoutAddress) return { synced: 0 };
+  const held = await das.heldPassIds(user.payoutAddress, { fresh: true });
+  let synced = 0;
+  for (const id of held) {
+    const claimed = await prisma.nftPass.updateMany({
+      where: { id, mintSig: { not: null }, NOT: { ownerId: userId } },
+      data: { ownerId: userId },
+    });
+    if (claimed.count) {
+      synced++;
+      // The previous wearer no longer holds it on-chain — strip their equip.
+      await prisma.user.updateMany({ where: { equippedPassId: id, NOT: { id: userId } }, data: { equippedPassId: null, nftBoost: 1.0 } });
+    }
+  }
+  await nft.refreshBoost(prisma, userId);
+  return { synced };
+}
+
+const syncLast = new Map(); // userId -> ts (simple per-user cooldown)
+app.post('/api/me/sync', requireAuth, async (req, res) => {
+  if (!das.enabled()) return res.status(400).json({ error: 'on-chain sync not configured' });
+  if (!req.user.payoutAddress) return res.status(400).json({ error: 'file a payout address first — passes are matched to that wallet' });
+  if (Date.now() - (syncLast.get(req.user.id) || 0) < 15_000) return res.status(429).json({ error: 'syncing too fast — give it a few seconds' });
+  if (syncLast.size > 5000) syncLast.clear();
+  syncLast.set(req.user.id, Date.now());
+  try {
+    const r = await syncPasses(req.user.id);
+    res.json({ ...r, user: await meResponse(req.user.id) });
+  } catch (e) {
+    res.status(502).json({ error: `chain read failed — try again shortly (${e.message})` });
+  }
+});
+
 // Wear / take off a Worker Pass — only the worn pass grants a boost.
+// A pass that's minted on-chain must still be HELD by the worker's payout wallet
+// (or custodially by the vault) to be wearable — you can't sell it and keep the boost.
 app.put('/api/me/equip', requireAuth, async (req, res) => {
   try {
     const passId = req.body.passId == null ? null : Number(req.body.passId);
+    if (passId != null) {
+      const pass = await prisma.nftPass.findFirst({ where: { id: passId, ownerId: req.user.id } });
+      if (!pass) return res.status(400).json({ error: 'you do not own that Worker Pass' });
+      if (pass.mintSig && das.enabled()) {
+        try {
+          const vault = solana.vaultPubkey();
+          const ok = (req.user.payoutAddress && await das.holdsPass(req.user.payoutAddress, pass.id))
+            || (vault && await das.holdsPass(vault, pass.id)); // custodial: minted before an address was filed
+          if (!ok) return res.status(400).json({ error: 'that pass is no longer held by your payout wallet — sold or moved?' });
+        } catch (e) {
+          console.error('[das] equip check failed (allowing — cron re-verifies):', e.message);
+        }
+      }
+    }
     await nft.equip(prisma, req.user.id, passId);
     res.json({ user: await meResponse(req.user.id) });
   } catch (e) {
@@ -650,6 +709,35 @@ cron.schedule('*/10 * * * *', guarded(async () => {
   for (const u of users) {
     const r = await executePayout(u);
     if (r.error) console.error(`[autopay] @${u.xUsername}: ${r.error}`);
+  }
+}));
+
+// Verify every WORN, on-chain-minted pass is still held by its wearer's payout
+// wallet (or custodially by the vault). Sellers lose the boost automatically.
+cron.schedule('*/15 * * * *', guarded(async () => {
+  if (!das.enabled()) return;
+  const wearers = await prisma.user.findMany({ where: { equippedPassId: { not: null } } });
+  if (!wearers.length) return;
+  const minted = new Map(
+    (await prisma.nftPass.findMany({ where: { id: { in: wearers.map((u) => u.equippedPassId) }, mintSig: { not: null } } }))
+      .map((p) => [p.id, p]),
+  );
+  const vault = solana.vaultPubkey();
+  let vaultHeld = null;
+  for (const u of wearers) {
+    const pass = minted.get(u.equippedPassId);
+    if (!pass) continue; // not minted on-chain yet — DB ownership is the truth
+    try {
+      if (u.payoutAddress && await das.holdsPass(u.payoutAddress, pass.id)) continue;
+      if (vault) {
+        if (vaultHeld === null) vaultHeld = await das.heldPassIds(vault);
+        if (vaultHeld.has(pass.id)) continue; // custodial — vault holds it for the worker
+      }
+      await prisma.user.update({ where: { id: u.id }, data: { equippedPassId: null, nftBoost: 1.0 } });
+      console.log(`[das] pass #${pass.id} left @${u.xUsername}'s wallet — boost removed`);
+    } catch (e) {
+      console.error('[das] verify skipped:', e.message); // never strip on a read error
+    }
   }
 }));
 
