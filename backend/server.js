@@ -23,10 +23,45 @@ const TOKEN_NAME = process.env.TOKEN_NAME || 'Apeployee';
 const DAILY_SHILL_CAP = Number(process.env.DAILY_SHILL_CAP || 20);
 const MIN_PAYOUT_LAMPORTS = 5_000_000; // 0.005 SOL
 const COOKIE = 'ape_session';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
+const CLUSTER = (process.env.SOLANA_RPC_URL || '').includes('devnet') ? 'devnet' : 'mainnet';
+const txExplorer = (sig) => `https://solscan.io/tx/${sig}${CLUSTER === 'devnet' ? '?cluster=devnet' : ''}`;
+
+// On-chain minting is optional; the server runs fine without the Metaplex deps.
+let mint = { enabled: () => false };
+try { mint = require('./services/mint'); } catch { /* not installed/configured */ }
 
 app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
 app.use('/nft/images', express.static(path.join(__dirname, '..', 'nft', 'output', 'images')));
+
+// Collection-level metadata for the cNFT collection NFT.
+app.get('/nft/collection.json', (_req, res) => {
+  res.json({
+    name: 'Apeployee Worker Pass',
+    symbol: 'APEPLOYEE',
+    description: 'Official employee credentials for APEPLOYEE — the memecoin that hires. 1000 numbered Worker Passes, auto-mined to workers, each boosting shill pay by tier.',
+    image: `${PUBLIC_BASE_URL}/nft/images/263.png`,
+    external_url: PUBLIC_BASE_URL,
+  });
+});
+
+// Metaplex-standard metadata with absolute URLs — this is what the cNFT `uri`
+// points at, so wallets and marketplaces can render the pass.
+app.get('/nft/metadata/:num', (req, res) => {
+  const num = String(req.params.num).replace(/\.json$/i, '');
+  if (!/^\d{3,4}$/.test(num)) return res.status(400).json({ error: 'bad pass number' });
+  try {
+    const meta = JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'nft', 'output', 'metadata', `${num}.json`), 'utf8'));
+    meta.image = `${PUBLIC_BASE_URL}/nft/images/${num}.png`;
+    meta.properties = meta.properties || {};
+    meta.properties.files = [{ uri: meta.image, type: 'image/png' }];
+    meta.external_url = PUBLIC_BASE_URL;
+    res.json(meta);
+  } catch {
+    res.status(404).json({ error: 'no such pass' });
+  }
+});
 
 // ---------- auth helpers ----------
 const setSession = (res, userId) => {
@@ -183,6 +218,16 @@ app.put('/api/me/payout', requireAuth, async (req, res) => {
 });
 
 // ---------- jobs ----------
+app.get('/api/jobs/public', async (_req, res) => {
+  const jobs = await prisma.job.findMany({ where: { active: true }, include: { _count: { select: { applications: true } } } });
+  res.json({
+    jobs: jobs.map((j) => ({
+      id: j.id, role: j.role, emoji: j.emoji, title: j.title, description: j.description,
+      perk: j.perk, hired: j._count.applications, myStatus: null,
+    })),
+  });
+});
+
 app.get('/api/jobs', requireAuth, async (req, res) => {
   const jobs = await prisma.job.findMany({
     where: { active: true },
@@ -211,7 +256,10 @@ app.post('/api/jobs/:id/apply', requireAuth, async (req, res) => {
 
   // Welcome pass: your first job comes with a guaranteed Common Worker Pass.
   let minedPass = null;
-  if (firstJob) minedPass = await nft.minePass(prisma, req.user.id, 'Common');
+  if (firstJob) {
+    minedPass = await nft.minePass(prisma, req.user.id, 'Common');
+    if (minedPass) mintOnChain(minedPass, req.user);
+  }
 
   res.json({
     application: { status: application.status, job: { title: job.title, emoji: job.emoji } },
@@ -258,7 +306,7 @@ app.post('/api/shills', requireAuth, async (req, res) => {
       metrics = tweet; text = tweet.text; simulated = false;
     } else {
       metrics = twitter.demoMetrics(tweetId, 0);
-      text = `LFG ${TICKER} — working for my bags 🦍 (simulated demo post)`;
+      text = `Working for my bags ${TICKER}. LFG.`;
       simulated = true;
     }
 
@@ -288,6 +336,7 @@ app.post('/api/shills', requireAuth, async (req, res) => {
       if (newShills % nft.MINE_EVERY === 0) minedPass = await nft.minePass(tx, req.user.id);
       return { shill, user, minedPass, rankedUp: newRank.name !== req.user.apeRank ? newRank : null };
     });
+    if (result.minedPass) mintOnChain(result.minedPass, req.user);
 
     res.json({
       shill: { ...result.shill, earned: Math.round(result.shill.earned) },
@@ -328,6 +377,54 @@ app.get('/api/passes/registry', async (_req, res) => {
       mined: mined.get(tier) || 0,
     })),
     recent: recent.map((p) => ({ ...nft.withImage(p), owner: p.owner?.xUsername })),
+  });
+});
+
+// Public registry browser: all 1000 passes, filterable, with owners + mint status.
+app.get('/api/registry/passes', async (req, res) => {
+  const perPage = 48;
+  const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
+  const where = {};
+  if (typeof req.query.tier === 'string' && nft.TIER_ORDER.includes(req.query.tier)) where.tier = req.query.tier;
+  if (req.query.mined === 'true') where.ownerId = { not: null };
+  if (req.query.mined === 'false') where.ownerId = null;
+  const [total, passes] = await Promise.all([
+    prisma.nftPass.count({ where }),
+    prisma.nftPass.findMany({
+      where, orderBy: { id: 'asc' }, skip: (page - 1) * perPage, take: perPage,
+      include: { owner: { select: { xUsername: true } } },
+    }),
+  ]);
+  res.json({
+    total, page, perPage,
+    passes: passes.map((p) => ({ ...nft.withImage(p), owner: p.owner?.xUsername || null })),
+  });
+});
+
+// Public proof feed: recent verified shills (with X links) and payouts (with tx links).
+app.get('/api/feed', async (_req, res) => {
+  const [shills, payments] = await Promise.all([
+    prisma.shillRecord.findMany({
+      orderBy: { createdAt: 'desc' }, take: 25,
+      include: { user: { select: { xUsername: true, xVerified: true } } },
+    }),
+    prisma.payment.findMany({
+      orderBy: { createdAt: 'desc' }, take: 25,
+      include: { user: { select: { xUsername: true } } },
+    }),
+  ]);
+  res.json({
+    shills: shills.map((s) => ({
+      id: s.id, handle: s.user.xUsername, verified: s.user.xVerified,
+      tweetId: s.tweetId, url: `https://x.com/i/web/status/${s.tweetId}`,
+      likes: s.likes, retweets: s.retweets, replies: s.replies, views: s.views,
+      earned: Math.round(s.earned), simulated: s.simulated, createdAt: s.createdAt,
+    })),
+    payments: payments.map((p) => ({
+      id: p.id, handle: p.user.xUsername, amount: Math.round(p.amount),
+      address: p.address, status: p.status, signature: p.signature,
+      explorer: p.signature ? txExplorer(p.signature) : null, createdAt: p.createdAt,
+    })),
   });
 });
 
@@ -414,6 +511,17 @@ app.get('/api/vault', async (_req, res) => {
     events,
   });
 });
+
+// Fire-and-forget on-chain mint of a freshly mined pass (no-op unless the
+// Metaplex pipeline is configured). Owner's payout address gets the cNFT when
+// set; otherwise the vault holds it in custody until they add one.
+function mintOnChain(pass, user) {
+  if (!mint.enabled()) return;
+  mint.mintPass(pass, user.payoutAddress || null)
+    .then((sig) => prisma.nftPass.update({ where: { id: pass.id }, data: { mintSig: sig } }))
+    .then(() => console.log(`[mint] pass #${pass.id} minted on-chain`))
+    .catch((e) => console.error(`[mint] pass #${pass.id} failed: ${e.message}`));
+}
 
 // ---------- crons ----------
 // Re-poll engagement on recent shills and credit the earnings delta.

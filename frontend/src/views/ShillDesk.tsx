@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { ViewProps } from '../App';
-import { api, compact, sol } from '../lib/api';
-import type { Pass, Rank, Shill, Me } from '../lib/api';
+import { ExternalLink } from 'lucide-react';
+import type { AppCtx } from '../App';
+import { api, compact, sol, when } from '../lib/api';
+import type { Me, Pass, Rank, Shill } from '../lib/api';
 import { Empty, Section, Spinner } from '../ui';
 
-export default function ShillDesk({ me, status, refreshMe, toast, celebrate, rankUp }: ViewProps) {
+export default function ShillDesk({ me, status, refreshMe, toast, celebrate, rankUp, setView }: AppCtx & { me: Me }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [shills, setShills] = useState<Shill[] | null>(null);
@@ -15,11 +16,11 @@ export default function ShillDesk({ me, status, refreshMe, toast, celebrate, ran
   const submit = async () => {
     setBusy(true);
     try {
-      const r = await api<{ earned: number; minedPass: Pass | null; rankedUp: Rank | null; user: Me }>(
+      const r = await api<{ earned: number; minedPass: Pass | null; rankedUp: Rank | null }>(
         '/api/shills', { method: 'POST', body: JSON.stringify({ url }) },
       );
       setUrl('');
-      toast(`Shift clocked: +${sol(r.earned)} 🦍`);
+      toast(`Shift clocked: +${sol(r.earned)}`);
       if (r.minedPass) celebrate(r.minedPass);
       if (r.rankedUp) rankUp(r.rankedUp);
       await Promise.all([load(), refreshMe()]);
@@ -33,52 +34,60 @@ export default function ShillDesk({ me, status, refreshMe, toast, celebrate, ran
   const hasJob = (me.jobs?.length ?? 0) > 0;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-display text-2xl font-bold">📣 Shill Desk</h1>
-        <p className="text-mute text-sm">Post about {status.ticker} on X, paste the link, get paid for the engagement. That's the job.</p>
-      </div>
+    <div className="space-y-5">
+      <p className="text-sm text-ink-soft">
+        Post about {status.ticker} on X, paste the link, get paid for the engagement. That is the job.
+      </p>
 
-      <div className="card-pad space-y-3">
-        {!hasJob && <div className="text-banana text-sm font-semibold">⚠️ You need a job first — swing by the Jobs board and get APELOYED.</div>}
-        <div className="flex flex-col sm:flex-row gap-2">
+      <div className="panel-pad space-y-3">
+        {!hasJob && (
+          <div className="text-sm text-stampred font-semibold">
+            You need a position first — <button className="underline" onClick={() => setView('jobs')}>open JOBS.EXE</button> and get hired.
+          </div>
+        )}
+        <div className="flex gap-2 flex-col sm:flex-row">
           <input
-            className="input font-mono text-sm" placeholder={`https://x.com/${me.handle}/status/…`}
+            className="input font-mono text-xs" placeholder={`https://x.com/${me.handle}/status/…`}
             value={url} onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && url && !busy && submit()}
           />
-          <button className="btn-primary shrink-0" onClick={submit} disabled={busy || !url || !hasJob}>
-            {busy ? <Spinner /> : 'Clock this shill'}
+          <button className="btn-xp shrink-0" onClick={submit} disabled={busy || !url || !hasJob}>
+            {busy ? <Spinner light /> : 'Clock this shift'}
           </button>
         </div>
-        <ul className="text-xs text-mute grid sm:grid-cols-2 gap-x-6 gap-y-1">
-          <li>• Post must mention <b className="text-banana">{status.ticker}</b> — that's the whole job</li>
-          <li>• Own posts only{me.verified ? ' (checked against your verified X account)' : ''}</li>
-          <li>• Every post pays once — engagement re-checked for 48h, wages grow with it</li>
-          <li>• Pay = ❤️/🔁/👁 × {me.rank.mult}x rank × {me.nftBoost.toFixed(2)}x pass boost · cap {status.dailyShillCap}/day</li>
-        </ul>
-        {status.xRead === 'simulated' && (
-          <div className="text-xs text-banana">Demo shift: engagement is simulated until X API keys are configured — numbers grow over ~4h like a real post.</div>
-        )}
+        <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">
+          <div className="label">The post must mention {status.ticker}</div>
+          <div className="label">Own posts only{me.verified ? ' — checked against your X account' : ''}</div>
+          <div className="label">Each post pays once; engagement re-checked for 48h</div>
+          <div className="label">Wage = engagement × {me.rank.mult}x rank × {me.nftBoost.toFixed(2)}x passes · cap {status.dailyShillCap}/day</div>
+        </div>
       </div>
 
-      <Section title={`🧾 Shift log ${shills ? `(${shills.length})` : ''}`}>
-        {!shills ? <div className="card-pad text-mute text-sm">loading…</div> :
-          shills.length === 0 ? <Empty emoji="📭" title="Nothing clocked yet" hint="Your first shill is one paste away." /> : (
-            <div className="card divide-y divide-line">
-              {shills.map((s) => (
-                <div key={s.id} className="p-4 flex items-center gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm truncate">{s.text || `post ${s.tweetId}`}</div>
-                    <div className="text-xs text-mute mt-0.5">
-                      ❤️ {compact(s.likes)} · 🔁 {compact(s.retweets)} · 💬 {compact(s.replies)} · 👁 {compact(s.views)}
-                      {s.simulated && <span className="text-banana"> · simulated</span>}
-                      <span> · {new Date(s.createdAt).toLocaleString()}</span>
-                    </div>
-                  </div>
-                  <div className="text-jungle font-bold text-sm shrink-0">+{sol(s.earned)}</div>
-                </div>
-              ))}
+      <Section title={`Shift log${shills ? ` (${shills.length})` : ''}`}>
+        {!shills ? <div className="panel-pad text-sm text-ink-soft">Loading…</div> :
+          shills.length === 0 ? <Empty title="Nothing clocked yet" hint="Your first shift is one paste away." /> : (
+            <div className="panel overflow-x-auto !bg-white">
+              <table className="w-full">
+                <thead><tr>
+                  <th className="th">When</th><th className="th">Post</th><th className="th">Engagement</th><th className="th text-right">Wage</th>
+                </tr></thead>
+                <tbody>
+                  {shills.map((s) => (
+                    <tr key={s.id}>
+                      <td className="td font-mono text-[11px] text-ink-soft whitespace-nowrap">{when(s.createdAt)}</td>
+                      <td className="td max-w-56">
+                        <a className="inline-flex items-center gap-1 text-sm hover:underline truncate max-w-full" href={`https://x.com/i/web/status/${s.tweetId}`} target="_blank" rel="noreferrer">
+                          <span className="truncate">{s.text || `post ${s.tweetId}`}</span> <ExternalLink size={11} className="shrink-0 text-ink-soft" />
+                        </a>
+                      </td>
+                      <td className="td font-mono text-[11px] whitespace-nowrap">
+                        {compact(s.likes)} likes · {compact(s.retweets)} rt · {compact(s.views)} views{s.simulated && <span className="text-ink-soft"> · unverified</span>}
+                      </td>
+                      <td className="td font-mono text-xs text-green text-right whitespace-nowrap">+{sol(s.earned)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
       </Section>

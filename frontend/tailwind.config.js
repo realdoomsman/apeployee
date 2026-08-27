@@ -1,41 +1,29 @@
 /** @type {import('tailwindcss').Config} */
+// Palette straight from the token PFP: XP Bliss sky + grass, putty office
+// plastic (classic #ECE9D8 dialog gray), banana, and a stamp red.
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        night: {
-          900: '#0B110D',
-          800: '#101812',
-          700: '#16211A',
-          600: '#1D2B22',
-          500: '#26382C',
-        },
-        line: '#25392B',
-        banana: { DEFAULT: '#FFD34D', dark: '#E0B33A' },
-        jungle: { DEFAULT: '#57A63A', dark: '#3F7E2A', bright: '#6DBE49' },
-        ape: { DEFAULT: '#8B5E3C', dark: '#5E3A21', tan: '#E9C9A3' },
-        lanyard: '#7A3E9D',
-        ink: '#EDF3EE',
-        mute: '#93A698',
+        paper: { DEFAULT: '#ECE9D8', panel: '#F7F5EC', deep: '#DCD7C2' },
+        ink: { DEFAULT: '#1E1D18', soft: '#6A6455' },
+        line: { DEFAULT: '#C9C4AE', dark: '#A5A08B' },
+        xp: { DEFAULT: '#2E6BD6', dark: '#1941A5', sky: '#3F8CDE', skylight: '#A9CCF0' },
+        green: { DEFAULT: '#3F8A2A', soft: '#E0EBD8', grass: '#4CA332' },
+        banana: { DEFAULT: '#E8B00C', soft: '#F6EBC4' },
+        stampred: '#A63B2E',
+        brown: '#7A5236',
       },
       fontFamily: {
-        display: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
-        body: ['Inter', 'system-ui', 'sans-serif'],
+        display: ['"Archivo Black"', 'system-ui', 'sans-serif'],
+        sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
       },
       keyframes: {
-        marquee: { '0%': { transform: 'translateX(0)' }, '100%': { transform: 'translateX(-50%)' } },
-        floaty: { '0%,100%': { transform: 'translateY(0)' }, '50%': { transform: 'translateY(-10px)' } },
-        pop: { '0%': { transform: 'scale(0.6)', opacity: '0' }, '70%': { transform: 'scale(1.06)' }, '100%': { transform: 'scale(1)', opacity: '1' } },
-        shimmer: { '0%': { backgroundPosition: '-200% 0' }, '100%': { backgroundPosition: '200% 0' } },
+        pop: { '0%': { transform: 'scale(0.75)', opacity: '0' }, '100%': { transform: 'scale(1)', opacity: '1' } },
       },
-      animation: {
-        marquee: 'marquee 45s linear infinite',
-        'marquee-slow': 'marquee 70s linear infinite',
-        floaty: 'floaty 5s ease-in-out infinite',
-        pop: 'pop 0.35s ease-out',
-        shimmer: 'shimmer 2.4s linear infinite',
-      },
+      animation: { pop: 'pop 0.18s ease-out' },
     },
   },
   plugins: [],

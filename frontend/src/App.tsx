@@ -1,43 +1,95 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Banknote, Briefcase, CreditCard, FileText, LogOut, Megaphone, Monitor, User, Users } from 'lucide-react';
 import { api, sol } from './lib/api';
 import type { Me, Pass, Rank, Status } from './lib/api';
 import { Modal, PassCard, Spinner } from './ui';
-import Landing from './views/Landing';
-import Dashboard from './views/Dashboard';
+import Overview from './views/Overview';
 import Jobs from './views/Jobs';
+import Registry from './views/Registry';
+import Payroll from './views/Payroll';
+import Workforce from './views/Workforce';
+import MyDesk from './views/MyDesk';
 import ShillDesk from './views/ShillDesk';
-import TrophyCase from './views/TrophyCase';
-import Leaderboard from './views/Leaderboard';
-import Vault from './views/Vault';
 
-type View = 'dashboard' | 'jobs' | 'shills' | 'passes' | 'leaderboard' | 'vault';
-const NAV: { key: View; label: string }[] = [
-  { key: 'dashboard', label: 'My Desk' },
-  { key: 'jobs', label: 'Jobs' },
-  { key: 'shills', label: 'Shill Desk' },
-  { key: 'passes', label: 'Trophy Case' },
-  { key: 'leaderboard', label: 'Leaderboard' },
-  { key: 'vault', label: 'Vault' },
-];
+export type View = 'welcome' | 'jobs' | 'registry' | 'payroll' | 'workforce' | 'desk' | 'shill';
 
-export interface ViewProps {
-  me: Me;
+export interface AppCtx {
+  me: Me | null;
   status: Status;
+  setView: (v: View) => void; // opens/focuses the window
   refreshMe: () => Promise<void>;
   toast: (msg: string, kind?: 'good' | 'bad') => void;
   celebrate: (pass: Pass) => void;
   rankUp: (rank: Rank) => void;
+  openSignIn: () => void;
 }
+
+interface WinDef { title: string; icon: typeof FileText; w: number; h: number; authed?: boolean }
+const WINDOWS: Record<View, WinDef> = {
+  welcome: { title: 'WELCOME.TXT — APEPLOYEE', icon: FileText, w: 780, h: 560 },
+  jobs: { title: 'JOBS.EXE — Ape Resources', icon: Briefcase, w: 830, h: 580 },
+  registry: { title: 'PASS_REGISTRY.EXE — 1000 Worker Passes', icon: CreditCard, w: 900, h: 620 },
+  payroll: { title: 'PAYROLL.EXE — Public Records', icon: Banknote, w: 860, h: 600 },
+  workforce: { title: 'WORKFORCE.EXE — Employee Rankings', icon: Users, w: 700, h: 560 },
+  desk: { title: 'MY_DESK.EXE — Employee File', icon: User, w: 820, h: 620, authed: true },
+  shill: { title: 'SHILL_DESK.EXE — Clock Your Shifts', icon: Megaphone, w: 780, h: 580, authed: true },
+};
+const DESKTOP_ICONS: View[] = ['welcome', 'jobs', 'shill', 'registry', 'payroll', 'workforce', 'desk'];
+
+interface WinState { open: boolean; min: boolean; x: number; y: number; z: number }
+
+function playSound(type: 'click' | 'open' | 'close' | 'boot') {
+  try {
+    const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctor();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'sine';
+    const cfg = {
+      click: [900, 900, 0.05, 0.04],
+      open: [500, 740, 0.05, 0.09],
+      close: [740, 500, 0.05, 0.09],
+      boot: [420, 840, 0.06, 0.28],
+    }[type];
+    osc.frequency.value = cfg[0];
+    gain.gain.value = cfg[2];
+    osc.start();
+    osc.frequency.linearRampToValueAtTime(cfg[1], ctx.currentTime + cfg[3]);
+    osc.stop(ctx.currentTime + cfg[3] + 0.02);
+  } catch { /* audio blocked — fine */ }
+}
+
+const BOOT_LINES = [
+  'APEPLOYEE OS v2.0 — BIOS OK',
+  'Mounting banana drive… OK',
+  'Loading payroll engine… OK',
+  'Syncing worker pass registry (1000 units)… OK',
+  'Connecting employment office… OK',
+  'THE MARKET IS ROUGH. PEOPLE NEED WORK.',
+];
 
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [booting, setBooting] = useState(true);
-  const [view, setView] = useState<View>('dashboard');
+  const [bootStep, setBootStep] = useState(0);
+  const [wins, setWins] = useState<Record<View, WinState>>(() => {
+    const base = {} as Record<View, WinState>;
+    (Object.keys(WINDOWS) as View[]).forEach((k, i) => {
+      base[k] = { open: false, min: false, x: 90 + i * 26, y: 30 + i * 20, z: 1 };
+    });
+    base.welcome = { ...base.welcome, open: true, x: Math.max(30, (window.innerWidth - 780) / 2 - 120), y: 34, z: 2 };
+    return base;
+  });
+  const zTop = useRef(10);
+  const [drag, setDrag] = useState<{ id: View; dx: number; dy: number } | null>(null);
+  const [signInOpen, setSignInOpen] = useState(false);
+  const [startOpen, setStartOpen] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; msg: string; kind: 'good' | 'bad' }[]>([]);
   const [minedPass, setMinedPass] = useState<Pass | null>(null);
   const [newRank, setNewRank] = useState<Rank | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [clock, setClock] = useState(new Date());
 
   const toast = useCallback((msg: string, kind: 'good' | 'bad' = 'good') => {
     const id = Date.now() + Math.random();
@@ -55,118 +107,234 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      try {
-        setStatus(await api<Status>('/api/status'));
-        await refreshMe();
-      } finally {
-        setBooting(false);
-      }
-    })();
+    api<Status>('/api/status').then(setStatus).catch(() => {});
+    refreshMe();
+    const t = setInterval(() => setClock(new Date()), 30_000);
+    return () => clearInterval(t);
   }, [refreshMe]);
 
-  if (booting || !status) {
+  // fake boot sequence
+  useEffect(() => {
+    if (!booting) return;
+    const t = setInterval(() => {
+      setBootStep((s) => {
+        if (s >= BOOT_LINES.length - 1) {
+          clearInterval(t);
+          setTimeout(() => { playSound('boot'); setBooting(false); }, 500);
+        }
+        return s + 1;
+      });
+    }, 240);
+    return () => clearInterval(t);
+  }, [booting]);
+
+  // window dragging
+  useEffect(() => {
+    if (!drag) return;
+    const move = (e: PointerEvent) => {
+      setWins((w) => ({
+        ...w,
+        [drag.id]: {
+          ...w[drag.id],
+          x: Math.min(Math.max(e.clientX - drag.dx, -WINDOWS[drag.id].w + 120), window.innerWidth - 120),
+          y: Math.min(Math.max(e.clientY - drag.dy, 0), window.innerHeight - 90),
+        },
+      }));
+    };
+    const up = () => setDrag(null);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    return () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+  }, [drag]);
+
+  const focusWin = (id: View) => setWins((w) => ({ ...w, [id]: { ...w[id], z: ++zTop.current, min: false } }));
+
+  const openWindow = useCallback((id: View) => {
+    if (WINDOWS[id].authed && !me) { setSignInOpen(true); return; }
+    playSound('open');
+    setWins((w) => ({ ...w, [id]: { ...w[id], open: true, min: false, z: ++zTop.current } }));
+    setStartOpen(false);
+  }, [me]);
+
+  const closeWindow = (id: View) => { playSound('close'); setWins((w) => ({ ...w, [id]: { ...w[id], open: false } })); };
+  const minimizeWindow = (id: View) => { playSound('click'); setWins((w) => ({ ...w, [id]: { ...w[id], min: true } })); };
+
+  if (!status) {
+    return <div className="fixed inset-0 bg-black grid place-items-center font-mono text-sm text-green-grass">contacting the office…</div>;
+  }
+
+  if (booting) {
     return (
-      <div className="min-h-screen grid place-items-center">
-        <div className="text-center">
-          <div className="text-5xl animate-floaty">🦍</div>
-          <div className="font-display font-bold mt-3 text-mute">clocking in…</div>
+      <div className="fixed inset-0 bg-black p-8 font-mono text-[13px] text-green-grass cursor-pointer" onClick={() => setBooting(false)}>
+        <div className="max-w-xl space-y-1.5">
+          <div className="text-white font-bold mb-4">APEPLOYEE OS <span className="text-green-grass">v2.0</span> {status.ticker}</div>
+          {BOOT_LINES.slice(0, bootStep + 1).map((l, i) => <div key={i}>&gt; {l}</div>)}
+          <div className="animate-pulse">_</div>
         </div>
       </div>
     );
   }
 
-  if (!me) return <Landing status={status} onAuthed={(u) => { setMe(u); setView('dashboard'); }} />;
-
-  const viewProps: ViewProps = {
-    me, status, refreshMe, toast,
-    celebrate: (p) => setMinedPass(p),
-    rankUp: (r) => setNewRank(r),
+  const ctx: AppCtx = {
+    me, status, setView: openWindow, refreshMe, toast,
+    celebrate: setMinedPass, rankUp: setNewRank, openSignIn: () => setSignInOpen(true),
   };
 
-  const simulated = status.payoutMode === 'simulated' || status.xRead === 'simulated';
+  const openList = (Object.keys(WINDOWS) as View[]).filter((k) => wins[k].open);
+  const topWin = openList.filter((k) => !wins[k].min).sort((a, b) => wins[b].z - wins[a].z)[0];
 
   return (
-    <div className="min-h-screen">
-      {simulated && (
-        <div className="bg-banana/10 border-b border-banana/25 text-banana text-xs text-center py-1.5 px-3 font-semibold">
-          Demo shift — {status.xRead === 'simulated' ? 'X engagement is simulated' : ''}
-          {status.xRead === 'simulated' && status.payoutMode === 'simulated' ? ' · ' : ''}
-          {status.payoutMode === 'simulated' ? 'payouts are simulated (no vault key)' : ''} · add API keys in backend/.env to go live
+    <div className="fixed inset-0 bliss overflow-hidden select-none">
+      {/* desktop icons */}
+      <div className="absolute inset-x-0 top-0 bottom-11 p-3 flex flex-col flex-wrap content-start gap-1 items-start">
+        {DESKTOP_ICONS.map((id) => {
+          const def = WINDOWS[id];
+          const Icon = def.icon;
+          return (
+            <button key={id} className="desk-icon" onDoubleClick={() => openWindow(id)} onClick={() => openWindow(id)}>
+              <span className="desk-icon-img"><Icon size={24} /></span>
+              <span className="desk-icon-label">{def.title.split(' ')[0]}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* windows */}
+      {openList.map((id) => {
+        const def = WINDOWS[id];
+        const st = wins[id];
+        if (st.min) return null;
+        return (
+          <div
+            key={id}
+            className={`win ${topWin === id ? 'win-active' : 'win-inactive'} select-text`}
+            style={{ left: st.x, top: st.y, width: def.w, height: def.h, zIndex: st.z, maxWidth: 'calc(100vw - 12px)', maxHeight: 'calc(100vh - 60px)' }}
+            onPointerDown={() => focusWin(id)}
+          >
+            <div
+              className="titlebar cursor-move"
+              onPointerDown={(e) => { focusWin(id); setDrag({ id, dx: e.clientX - st.x, dy: e.clientY - st.y }); }}
+            >
+              <span className="font-mono tracking-wide">{def.title}</span>
+              <span className="titlebar-btns" onPointerDown={(e) => e.stopPropagation()}>
+                <button className="titlebar-btn" title="Minimize" onClick={() => minimizeWindow(id)} />
+                <button className="titlebar-btn titlebar-btn-close" title="Close" onClick={() => closeWindow(id)} />
+              </span>
+            </div>
+            <div className="win-body">
+              {def.authed && !me ? (
+                <div className="text-center py-14">
+                  <div className="font-display uppercase text-sm tracking-wider">Employees only</div>
+                  <button className="btn-xp mt-4" onClick={() => setSignInOpen(true)}>Clock in</button>
+                </div>
+              ) : (
+                <>
+                  {id === 'welcome' && <Overview {...ctx} />}
+                  {id === 'jobs' && <Jobs {...ctx} />}
+                  {id === 'registry' && <Registry {...ctx} />}
+                  {id === 'payroll' && <Payroll {...ctx} />}
+                  {id === 'workforce' && <Workforce {...ctx} />}
+                  {id === 'desk' && me && <MyDesk {...ctx} me={me} />}
+                  {id === 'shill' && me && <ShillDesk {...ctx} me={me} />}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* start menu */}
+      {startOpen && (
+        <div className="absolute bottom-11 left-1.5 z-50 w-64 window overflow-hidden">
+          <div className="titlebar"><Monitor size={13} /> APEPLOYEE OS</div>
+          <div className="bg-paper p-2 space-y-1">
+            {(Object.keys(WINDOWS) as View[]).map((id) => {
+              const Icon = WINDOWS[id].icon;
+              return (
+                <button key={id} className="w-full text-left px-2.5 py-1.5 rounded-[3px] text-sm hover:bg-xp hover:text-white flex items-center gap-2" onClick={() => openWindow(id)}>
+                  <Icon size={15} /> {WINDOWS[id].title.split(' — ')[0]}
+                </button>
+              );
+            })}
+            <div className="border-t border-line pt-1 mt-1">
+              {me ? (
+                <button
+                  className="w-full text-left px-2.5 py-1.5 rounded-[3px] text-sm hover:bg-stampred hover:text-white flex items-center gap-2"
+                  onClick={async () => { await api('/api/auth/logout', { method: 'POST' }); setMe(null); setStartOpen(false); }}
+                >
+                  <LogOut size={15} /> Clock out (@{me.handle})
+                </button>
+              ) : (
+                <button className="w-full text-left px-2.5 py-1.5 rounded-[3px] text-sm hover:bg-green hover:text-white flex items-center gap-2" onClick={() => { setSignInOpen(true); setStartOpen(false); }}>
+                  <User size={15} /> Clock in
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      <header className="sticky top-0 z-40 backdrop-blur-md bg-night-900/80 border-b border-line">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center gap-3">
-          <button className="flex items-center gap-2.5 shrink-0" onClick={() => setView('dashboard')}>
-            <img src="/favicon.svg" alt="" className="w-9 h-9" />
-            <span className="font-display font-bold text-lg tracking-tight hidden sm:block">
-              APEPLOYEE <span className="text-banana">{status.ticker}</span>
-            </span>
-          </button>
-
-          <nav className="flex-1 flex items-center gap-1 overflow-x-auto">
-            {NAV.map((n) => (
-              <button key={n.key} className={`navlink whitespace-nowrap ${view === n.key ? 'navlink-active' : ''}`} onClick={() => setView(n.key)}>
-                {n.label}
-              </button>
-            ))}
-          </nav>
-
-          <div className="relative shrink-0 flex items-center gap-2.5">
-            <span className="chip border-jungle/50 text-jungle bg-jungle/10 hidden md:inline-flex">💰 {sol(me.balance)}</span>
-            <button className="flex items-center gap-2" onClick={() => setMenuOpen((o) => !o)}>
-              {me.topPass
-                ? <img src={me.topPass.image} alt="" className={`w-9 h-9 rounded-xl border-2 object-cover tier-${me.topPass.tier}`} />
-                : <span className="w-9 h-9 rounded-xl bg-night-700 border border-line grid place-items-center">🐒</span>}
+      {/* taskbar */}
+      <div className="taskbar">
+        <button className="start-btn" onClick={() => { playSound('click'); setStartOpen((o) => !o); }}>APE START</button>
+        <div className="flex-1 flex items-center gap-1.5 overflow-x-auto">
+          {openList.map((id) => (
+            <button
+              key={id}
+              className={`task-btn ${topWin === id && !wins[id].min ? 'task-btn-active' : ''}`}
+              onClick={() => (wins[id].min || topWin !== id ? focusWin(id) : minimizeWindow(id))}
+            >
+              {WINDOWS[id].title.split(' ')[0]}
             </button>
-            {menuOpen && <ProfileMenu me={me} refreshMe={refreshMe} toast={toast} close={() => setMenuOpen(false)} onSignout={() => setMe(null)} />}
-          </div>
+          ))}
         </div>
-      </header>
+        <div className="tray shrink-0">
+          {me && <span className="hidden sm:inline">@{me.handle} · {sol(me.balance)}</span>}
+          <span className={status.payoutMode === 'live' ? 'text-green-grass' : 'text-white/70'}>{status.payoutMode === 'live' ? 'VAULT LIVE' : 'PRE-LAUNCH'}</span>
+          <span>{clock.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
+        </div>
+      </div>
 
-      <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-        {view === 'dashboard' && <Dashboard {...viewProps} />}
-        {view === 'jobs' && <Jobs {...viewProps} />}
-        {view === 'shills' && <ShillDesk {...viewProps} />}
-        {view === 'passes' && <TrophyCase {...viewProps} />}
-        {view === 'leaderboard' && <Leaderboard {...viewProps} />}
-        {view === 'vault' && <Vault {...viewProps} />}
-      </main>
+      {/* sign-in */}
+      {signInOpen && (
+        <SignIn status={status} onClose={() => setSignInOpen(false)} onAuthed={(u) => { setMe(u); setSignInOpen(false); openWindow('desk'); }} />
+      )}
 
-      <footer className="max-w-6xl mx-auto px-4 py-8 text-center text-xs text-mute">
-        The market is rough. People need work. — APEPLOYEE {status.ticker} · not financial advice, just employment 🦍
-      </footer>
-
-      {/* mined pass celebration */}
+      {/* mined pass */}
       {minedPass && (
         <Modal onClose={() => setMinedPass(null)}>
-          <div className="card p-5 text-center space-y-3">
-            <div className="font-display font-bold text-banana tracking-widest text-sm">⛏️ NEW WORKER PASS MINED</div>
-            <PassCard pass={minedPass} />
-            <p className="text-sm text-mute">Auto-mined for working your shift. Holding it boosts every future payout.</p>
-            <button className="btn-primary w-full" onClick={() => setMinedPass(null)}>Back to work</button>
+          <div className="window overflow-hidden">
+            <div className="titlebar">MINING_REPORT.EXE<span className="titlebar-btns"><button className="titlebar-btn titlebar-btn-close" onClick={() => setMinedPass(null)} /></span></div>
+            <div className="p-4 space-y-3 bg-paper">
+              <div className="font-display text-center uppercase tracking-wider">Worker Pass Mined</div>
+              <PassCard pass={minedPass} />
+              <p className="text-sm text-ink-soft text-center">Filed to your locker. Holding it raises every future wage.</p>
+              <button className="btn-xp w-full" onClick={() => setMinedPass(null)}>Back to work</button>
+            </div>
           </div>
         </Modal>
       )}
 
-      {/* rank up */}
+      {/* promotion */}
       {newRank && (
         <Modal onClose={() => setNewRank(null)}>
-          <div className="card p-6 text-center space-y-3">
-            <div className="text-6xl animate-floaty">{newRank.emoji}</div>
-            <div className="font-display text-xl font-bold">PROMOTED TO {newRank.label.toUpperCase()}</div>
-            <p className="text-sm text-mute">Pay multiplier is now <span className="text-banana font-bold">{newRank.mult}x</span>. HR says congrats.</p>
-            <button className="btn-primary w-full" onClick={() => setNewRank(null)}>LFG</button>
+          <div className="window overflow-hidden">
+            <div className="titlebar">HR_NOTICE.EXE<span className="titlebar-btns"><button className="titlebar-btn titlebar-btn-close" onClick={() => setNewRank(null)} /></span></div>
+            <div className="p-6 text-center space-y-4 bg-paper">
+              <div className="stamp text-base">Promoted</div>
+              <div className="font-display text-xl uppercase">{newRank.label}</div>
+              <p className="text-sm text-ink-soft">Pay multiplier is now <span className="font-mono font-semibold text-ink">{newRank.mult}x</span>. HR has updated your file.</p>
+              <button className="btn-xp w-full" onClick={() => setNewRank(null)}>Continue</button>
+            </div>
           </div>
         </Modal>
       )}
 
       {/* toasts */}
-      <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-xs">
+      <div className="fixed bottom-14 right-3 z-50 space-y-2 max-w-xs">
         {toasts.map((t) => (
-          <div key={t.id} className={`card px-4 py-3 text-sm font-semibold animate-pop ${t.kind === 'bad' ? 'border-red-500/60 text-red-300' : 'border-jungle/60'}`}>
-            {t.msg}
+          <div key={t.id} className={`window overflow-hidden animate-pop`}>
+            <div className={`px-3.5 py-2.5 text-sm font-medium bg-paper border-l-4 ${t.kind === 'bad' ? 'border-l-stampred' : 'border-l-green'}`}>{t.msg}</div>
           </div>
         ))}
       </div>
@@ -174,49 +342,53 @@ export default function App() {
   );
 }
 
-function ProfileMenu({ me, refreshMe, toast, close, onSignout }: {
-  me: Me; refreshMe: () => Promise<void>;
-  toast: (m: string, k?: 'good' | 'bad') => void; close: () => void; onSignout: () => void;
-}) {
-  const [address, setAddress] = useState(me.payoutAddress || '');
-  const [saving, setSaving] = useState(false);
+function SignIn({ status, onClose, onAuthed }: { status: Status; onClose: () => void; onAuthed: (me: Me) => void }) {
+  const [handle, setHandle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
-  const save = async () => {
-    setSaving(true);
+  const submit = async () => {
+    setBusy(true); setError('');
     try {
-      await api('/api/me/payout', { method: 'PUT', body: JSON.stringify({ address }) });
-      await refreshMe();
-      toast(address ? 'Payout address saved 🍌' : 'Payout address cleared');
-      close();
+      const { user } = await api<{ user: Me }>('/api/auth/demo', { method: 'POST', body: JSON.stringify({ handle }) });
+      onAuthed(user);
     } catch (e) {
-      toast((e as Error).message, 'bad');
+      setError((e as Error).message);
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
 
-  const signout = async () => {
-    await api('/api/auth/logout', { method: 'POST' });
-    onSignout();
-  };
-
   return (
-    <div className="absolute right-0 top-12 w-80 card p-4 space-y-3 shadow-2xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-display font-bold">@{me.handle}</div>
-          <div className="text-xs text-mute">
-            {me.verified ? '✅ X verified' : me.demo ? '🎪 demo account' : 'unverified'} · {me.rank.emoji} {me.rank.label}
-          </div>
+    <Modal onClose={onClose}>
+      <div className="window overflow-hidden">
+        <div className="titlebar">CLOCK_IN.EXE<span className="titlebar-btns"><button className="titlebar-btn titlebar-btn-close" onClick={onClose} /></span></div>
+        <div className="p-5 space-y-4 bg-paper">
+          <p className="text-sm text-ink-soft">
+            Your X account is your employee ID. <b className="text-ink">No wallet ever connects</b> —
+            you paste a payout address later, and that is the only wallet detail the office touches.
+          </p>
+          {status.xMode === 'live' ? (
+            <a className="btn-xp w-full" href="/api/auth/x/start">Continue with X</a>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  className="input font-mono" placeholder="@yourhandle" value={handle} autoFocus
+                  onChange={(e) => setHandle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handle && !busy && submit()}
+                />
+                <button className="btn-xp shrink-0" onClick={submit} disabled={busy || !handle}>
+                  {busy ? <Spinner light /> : 'Clock in'}
+                </button>
+              </div>
+              {error && <div className="text-stampred text-sm">{error}</div>}
+              <div className="label">X account verification activates at launch.</div>
+            </div>
+          )}
+          <button className="btn-ink w-full" onClick={onClose}>Just browsing</button>
         </div>
-        <button className="text-mute hover:text-ink" onClick={close}>✕</button>
       </div>
-      <div className="space-y-1.5">
-        <label className="text-xs font-semibold text-mute">Payout address (SOL is sent here — no wallet connection needed)</label>
-        <input className="input text-xs font-mono" placeholder="paste your Solana address" value={address} onChange={(e) => setAddress(e.target.value)} />
-        <button className="btn-green w-full" onClick={save} disabled={saving}>{saving ? <Spinner /> : 'Save address'}</button>
-      </div>
-      <button className="btn-ghost w-full" onClick={signout}>Clock out (sign out)</button>
-    </div>
+    </Modal>
   );
 }
