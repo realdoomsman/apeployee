@@ -1,16 +1,17 @@
-// Pump.fun creator-fee sweeper. Claims $APE creator fees into the vault so the
-// payroll can distribute them to workers. Enabled only when the creator key +
-// mint are configured; otherwise a safe no-op (the app runs fully without it).
+// Pump.fun creator-fee sweeper. Claims $APEPLOYEE creator fees into the vault so
+// payroll can distribute them to workers. Safe no-op unless configured.
 //
-// Two claim backends, chosen by env:
-//   PUMPFUN_CLAIM_MODE=pumpportal  -> PumpPortal /api/trade-local (build+sign locally)
-//   PUMPFUN_CLAIM_MODE=off (default until launch)
-//
-// The creator fee wallet IS the vault wallet (SOLANA_PRIVATE_KEY), so claimed
-// SOL lands directly in the vault the payroll pays from.
+// Claim backends, chosen by env PUMPFUN_CLAIM_MODE:
+//   distribute  -> official @pump-fun/pump-sdk distributeCreatorFees crank. USE THIS
+//                  when the coin has a FEE SHARING config (our setup: 100% of shares
+//                  -> the vault). Permissionless: the vault cranks the distribution
+//                  and receives its share directly.
+//   pumpportal  -> PumpPortal collectCreatorFee (classic path — only works when the
+//                  signing wallet IS the coin's creator/fee authority; ours is not).
+//   off         -> disabled (default).
 const axios = require('axios');
 const {
-  Connection, Keypair, VersionedTransaction,
+  Connection, Keypair, PublicKey, Transaction, VersionedTransaction, ComputeBudgetProgram,
 } = require('@solana/web3.js');
 const bs58 = require('bs58');
 
@@ -25,29 +26,57 @@ if (KEY && MODE !== 'off') {
   try { creator = Keypair.fromSecretKey(dec(KEY)); } catch { creator = null; }
 }
 
-const enabled = () => creator !== null && MODE === 'pumpportal';
+const enabled = () => creator !== null && (MODE === 'pumpportal' || (MODE === 'distribute' && Boolean(MINT)));
 
-// Claims all outstanding creator fees to the vault. Returns lamports claimed
-// (best-effort; PumpPortal doesn't report the amount, so we diff the balance).
-async function claimFees() {
-  if (!enabled()) return 0;
-  const conn = new Connection(RPC, 'confirmed');
+// Fee-sharing distribution via the official SDK. The vault holds 100% of the fee
+// shares, so cranking the distribution pays the vault. Skips (free, simulation-only)
+// while accrued fees are below the program's minimum distributable amount.
+async function claimViaDistribute(conn) {
+  const { OnlinePumpSdk } = require('@pump-fun/pump-sdk');
+  const sdk = new OnlinePumpSdk(conn);
+  const mintPk = new PublicKey(MINT);
+
+  const min = await sdk.getMinimumDistributableFee(mintPk);
+  if (!min.canDistribute) return null; // nothing (or too little) accrued — no tx, no fee
+
   const before = await conn.getBalance(creator.publicKey);
+  const { instructions } = await sdk.buildDistributeCreatorFeesInstructions(mintPk);
+  const tx = new Transaction()
+    .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }))
+    .add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1_000 }))
+    .add(...instructions);
+  tx.feePayer = creator.publicKey;
+  tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
+  tx.sign(creator);
+  const sig = await conn.sendRawTransaction(tx.serialize());
+  await conn.confirmTransaction(sig, 'confirmed');
 
+  const after = await conn.getBalance(creator.publicKey);
+  return { signature: sig, claimed: Math.max(0, after - before) };
+}
+
+// Legacy classic-creator claim via PumpPortal (kept for coins created BY the vault).
+async function claimViaPumpPortal(conn) {
+  const before = await conn.getBalance(creator.publicKey);
   const res = await axios.post('https://pumpportal.fun/api/trade-local', {
     publicKey: creator.publicKey.toBase58(),
     action: 'collectCreatorFee',
     priorityFee: 0.000001,
     pool: 'pump',
   }, { responseType: 'arraybuffer' });
-
   const tx = VersionedTransaction.deserialize(new Uint8Array(res.data));
   tx.sign([creator]);
   const sig = await conn.sendRawTransaction(tx.serialize());
   await conn.confirmTransaction(sig, 'confirmed');
-
   const after = await conn.getBalance(creator.publicKey);
   return { signature: sig, claimed: Math.max(0, after - before) };
+}
+
+// Claims outstanding creator fees to the vault. Returns { signature, claimed } or null.
+async function claimFees() {
+  if (!enabled()) return null;
+  const conn = new Connection(RPC, 'confirmed');
+  return MODE === 'distribute' ? claimViaDistribute(conn) : claimViaPumpPortal(conn);
 }
 
 module.exports = { enabled, claimFees, mode: MODE, mint: MINT };
