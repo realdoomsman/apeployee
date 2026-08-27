@@ -5,7 +5,9 @@
 // every write rounds to an integer.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Include the Linux engines Railway's runtime needs (build detects only "native").
+  binaryTargets = ["native", "debian-openssl-3.0.x", "debian-openssl-1.1.x"]
 }
 
 datasource db {
