@@ -63,7 +63,7 @@
     box-shadow: inset 1px 1px 2px rgba(90, 85, 65, 0.4);
   }
 
-  .th { @apply label text-left px-3 py-2 bg-paper-deep border-b border-line-dark; }
+  .th { @apply text-left px-3 py-2 bg-paper-deep border-b border-line-dark font-mono text-[11px] uppercase tracking-[0.13em] text-ink; }
   .td { @apply px-3 py-2.5 text-sm border-b border-line align-middle bg-white; }
 
   /* XP progress: green blocks in a sunken track */

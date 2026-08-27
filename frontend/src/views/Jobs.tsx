@@ -20,10 +20,9 @@ export default function Jobs({ me, refreshMe, toast, celebrate, openSignIn }: Ap
   const [applying, setApplying] = useState<string | null>(null);
 
   const load = () => {
-    // Job list needs auth for per-user status; fall back to the public shape when signed out.
-    api<{ jobs: Job[] }>('/api/jobs')
-      .then((r) => setJobs(r.jobs))
-      .catch(() => api<{ jobs: Job[] }>('/api/jobs/public').then((r) => setJobs(r.jobs)).catch(() => setJobs([])));
+    // Signed-in users get per-user status; signed-out users get the public list.
+    const path = me ? '/api/jobs' : '/api/jobs/public';
+    api<{ jobs: Job[] }>(path).then((r) => setJobs(r.jobs)).catch(() => setJobs([]));
   };
   useEffect(() => { load(); }, [me?.id]);
 
@@ -69,7 +68,7 @@ export default function Jobs({ me, refreshMe, toast, celebrate, openSignIn }: Ap
                   {j.myStatus === 'APELOYED' ? (
                     <div className="text-center py-1"><span className="stamp">Apeloyed</span></div>
                   ) : (
-                    <button className="btn-ink w-full" onClick={() => apply(j)} disabled={applying !== null}>
+                    <button className="btn-ink w-full" onClick={() => apply(j)} disabled={applying === j.id}>
                       {applying === j.id ? <Spinner light /> : 'Apply'}
                     </button>
                   )}

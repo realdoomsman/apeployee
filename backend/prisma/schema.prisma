@@ -24,7 +24,8 @@ model User {
   totalShills    Int      @default(0)
   balance        Float    @default(0) // claimable lamports
   lifetimeEarned Float    @default(0) // lamports ever earned
-  nftBoost       Float    @default(1.0) // highest owned pass boost; written by NFT service only
+  nftBoost       Float    @default(1.0) // boost from the currently WORN pass (1.0 if none)
+  equippedPassId Int? // the pass the worker is wearing; only this one grants a boost
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -70,6 +71,7 @@ model ShillRecord {
   replies     Int       @default(0)
   views        Int       @default(0)
   earned       Float     @default(0) // lamports credited so far for this tweet
+  mult         Float     @default(1.0) // rank×boost frozen at submit — re-polls never re-price at current rank
   simulated    Boolean   @default(false) // true when metrics are demo-generated
   createdAt    DateTime  @default(now())
   lastPolledAt DateTime?

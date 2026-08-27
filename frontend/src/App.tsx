@@ -60,20 +60,9 @@ function playSound(type: 'click' | 'open' | 'close' | 'boot') {
   } catch { /* audio blocked — fine */ }
 }
 
-const BOOT_LINES = [
-  'APEPLOYEE OS v2.0 — BIOS OK',
-  'Mounting banana drive… OK',
-  'Loading payroll engine… OK',
-  'Syncing worker pass registry (1000 units)… OK',
-  'Connecting employment office… OK',
-  'THE MARKET IS ROUGH. PEOPLE NEED WORK.',
-];
-
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [me, setMe] = useState<Me | null>(null);
-  const [booting, setBooting] = useState(true);
-  const [bootStep, setBootStep] = useState(0);
   const [wins, setWins] = useState<Record<View, WinState>>(() => {
     const base = {} as Record<View, WinState>;
     (Object.keys(WINDOWS) as View[]).forEach((k, i) => {
@@ -90,6 +79,7 @@ export default function App() {
   const [minedPass, setMinedPass] = useState<Pass | null>(null);
   const [newRank, setNewRank] = useState<Rank | null>(null);
   const [clock, setClock] = useState(new Date());
+  const [pendingOpen, setPendingOpen] = useState<View | null>(null);
 
   const toast = useCallback((msg: string, kind: 'good' | 'bad' = 'good') => {
     const id = Date.now() + Math.random();
@@ -113,21 +103,6 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshMe]);
 
-  // fake boot sequence
-  useEffect(() => {
-    if (!booting) return;
-    const t = setInterval(() => {
-      setBootStep((s) => {
-        if (s >= BOOT_LINES.length - 1) {
-          clearInterval(t);
-          setTimeout(() => { playSound('boot'); setBooting(false); }, 500);
-        }
-        return s + 1;
-      });
-    }, 240);
-    return () => clearInterval(t);
-  }, [booting]);
-
   // window dragging
   useEffect(() => {
     if (!drag) return;
@@ -150,29 +125,37 @@ export default function App() {
   const focusWin = (id: View) => setWins((w) => ({ ...w, [id]: { ...w[id], z: ++zTop.current, min: false } }));
 
   const openWindow = useCallback((id: View) => {
-    if (WINDOWS[id].authed && !me) { setSignInOpen(true); return; }
+    if (WINDOWS[id].authed && !me) { setPendingOpen(id); setSignInOpen(true); return; }
     playSound('open');
     setWins((w) => ({ ...w, [id]: { ...w[id], open: true, min: false, z: ++zTop.current } }));
     setStartOpen(false);
+  }, [me]);
+
+  // Open a window that was requested before sign-in, once `me` is populated.
+  // Fixes the stale-closure bug where onAuthed's openWindow saw me === null.
+  useEffect(() => {
+    if (me && pendingOpen) {
+      setWins((w) => ({ ...w, [pendingOpen]: { ...w[pendingOpen], open: true, min: false, z: ++zTop.current } }));
+      setPendingOpen(null);
+    }
+  }, [me, pendingOpen]);
+
+  // On logout, close employees-only windows so no stale placeholder lingers.
+  useEffect(() => {
+    if (!me) {
+      setWins((w) => {
+        const next = { ...w };
+        (Object.keys(WINDOWS) as View[]).forEach((k) => { if (WINDOWS[k].authed) next[k] = { ...next[k], open: false }; });
+        return next;
+      });
+    }
   }, [me]);
 
   const closeWindow = (id: View) => { playSound('close'); setWins((w) => ({ ...w, [id]: { ...w[id], open: false } })); };
   const minimizeWindow = (id: View) => { playSound('click'); setWins((w) => ({ ...w, [id]: { ...w[id], min: true } })); };
 
   if (!status) {
-    return <div className="fixed inset-0 bg-black grid place-items-center font-mono text-sm text-green-grass">contacting the office…</div>;
-  }
-
-  if (booting) {
-    return (
-      <div className="fixed inset-0 bg-black p-8 font-mono text-[13px] text-green-grass cursor-pointer" onClick={() => setBooting(false)}>
-        <div className="max-w-xl space-y-1.5">
-          <div className="text-white font-bold mb-4">APEPLOYEE OS <span className="text-green-grass">v2.0</span> {status.ticker}</div>
-          {BOOT_LINES.slice(0, bootStep + 1).map((l, i) => <div key={i}>&gt; {l}</div>)}
-          <div className="animate-pulse">_</div>
-        </div>
-      </div>
-    );
+    return <div className="fixed inset-0 bliss grid place-items-center font-mono text-xs uppercase tracking-widest text-white/90">opening the office…</div>;
   }
 
   const ctx: AppCtx = {
@@ -191,7 +174,7 @@ export default function App() {
           const def = WINDOWS[id];
           const Icon = def.icon;
           return (
-            <button key={id} className="desk-icon" onDoubleClick={() => openWindow(id)} onClick={() => openWindow(id)}>
+            <button key={id} className="desk-icon" onClick={() => openWindow(id)}>
               <span className="desk-icon-img"><Icon size={24} /></span>
               <span className="desk-icon-label">{def.title.split(' ')[0]}</span>
             </button>
@@ -297,7 +280,11 @@ export default function App() {
 
       {/* sign-in */}
       {signInOpen && (
-        <SignIn status={status} onClose={() => setSignInOpen(false)} onAuthed={(u) => { setMe(u); setSignInOpen(false); openWindow('desk'); }} />
+        <SignIn
+          status={status}
+          onClose={() => setSignInOpen(false)}
+          onAuthed={(u) => { setMe(u); setSignInOpen(false); setPendingOpen((p) => p ?? 'desk'); }}
+        />
       )}
 
       {/* mined pass */}

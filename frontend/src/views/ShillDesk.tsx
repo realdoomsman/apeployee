@@ -49,7 +49,7 @@ export default function ShillDesk({ me, status, refreshMe, toast, celebrate, ran
           <input
             className="input font-mono text-xs" placeholder={`https://x.com/${me.handle}/status/…`}
             value={url} onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && url && !busy && submit()}
+            onKeyDown={(e) => e.key === 'Enter' && url && !busy && hasJob && submit()}
           />
           <button className="btn-xp shrink-0" onClick={submit} disabled={busy || !url || !hasJob}>
             {busy ? <Spinner light /> : 'Clock this shift'}

@@ -10,14 +10,16 @@ export type TierName = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
 export interface Pass {
   id: number; tier: TierName; boost: number; image: string;
   background: string; fur: string; outfit: string; eyewear: string; headwear: string; item: string;
-  minedAt?: string | null; mintSig?: string | null;
+  minedAt?: string | null; mintSig?: string | null; equipped?: boolean;
 }
+export interface Stats { workers: number; mined: number; totalPasses: number; totalPaid: number; totalOwed: number }
 export interface MyJob { role: string; title: string; emoji: string; status: string }
 export interface Me {
   id: string; handle: string; verified: boolean; demo: boolean;
   payoutAddress: string | null; rank: Rank;
   nextRank: { label: string; emoji: string; shills: number } | null;
   totalShills: number; balance: number; lifetimeEarned: number; nftBoost: number;
+  equippedPassId: number | null;
   mine: { current: number; needed: number; remaining: number };
   passCount?: number; topPass?: Pass | null; jobs?: MyJob[];
 }

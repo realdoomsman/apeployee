@@ -5,7 +5,7 @@ import { api, compact, shortAddr, sol, when } from '../lib/api';
 import type { Me, Pass, Payment, Shill } from '../lib/api';
 import { Empty, PassCard, Section, Spinner, Stat, StatusTag } from '../ui';
 
-export default function MyDesk({ me, status, refreshMe, toast, setView }: AppCtx & { me: Me }) {
+export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: Me }) {
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [shills, setShills] = useState<Shill[] | null>(null);
   const [passes, setPasses] = useState<Pass[] | null>(null);
@@ -13,11 +13,25 @@ export default function MyDesk({ me, status, refreshMe, toast, setView }: AppCtx
   const [saving, setSaving] = useState(false);
   const [paying, setPaying] = useState(false);
 
+  const loadPasses = () => api<{ passes: Pass[] }>('/api/passes').then((r) => setPasses(r.passes)).catch(() => setPasses([]));
   useEffect(() => {
     api<{ payments: Payment[] }>('/api/payments').then((r) => setPayments(r.payments)).catch(() => setPayments([]));
     api<{ shills: Shill[] }>('/api/shills').then((r) => setShills(r.shills)).catch(() => setShills([]));
-    api<{ passes: Pass[] }>('/api/passes').then((r) => setPasses(r.passes)).catch(() => setPasses([]));
-  }, [me.totalShills, me.balance, me.passCount]);
+    loadPasses();
+  }, [me.totalShills, me.balance, me.passCount, me.equippedPassId]);
+
+  // Keep the address field in sync when the profile refreshes elsewhere.
+  useEffect(() => { setAddress(me.payoutAddress || ''); }, [me.payoutAddress]);
+
+  const equip = async (passId: number | null) => {
+    try {
+      await api('/api/me/equip', { method: 'PUT', body: JSON.stringify({ passId }) });
+      await Promise.all([refreshMe(), loadPasses()]);
+      toast(passId ? 'Pass equipped — boost active.' : 'Pass removed — boost off.');
+    } catch (e) {
+      toast((e as Error).message, 'bad');
+    }
+  };
 
   const saveAddress = async () => {
     setSaving(true);
@@ -62,7 +76,9 @@ export default function MyDesk({ me, status, refreshMe, toast, setView }: AppCtx
           </div>
           <div className="label mt-0.5">Positions: {me.jobs?.length ? me.jobs.map((j) => j.title).join(', ') : 'unemployed — visit JOBS.EXE'}</div>
         </div>
-        <span className="stamp">Apeloyed</span>
+        {(me.jobs?.length ?? 0) > 0
+          ? <span className="stamp">Apeloyed</span>
+          : <span className="stamp !text-ink-soft !border-ink-soft">Unhired</span>}
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -90,7 +106,7 @@ export default function MyDesk({ me, status, refreshMe, toast, setView }: AppCtx
       </div>
 
       <Section title="Payroll settings" right={
-        <button className="btn-green" onClick={requestPayout} disabled={paying || me.balance < 5_000_000}>
+        <button className="btn-green" onClick={requestPayout} disabled={paying || me.balance < 5_000_000 || !me.payoutAddress} title={!me.payoutAddress ? 'Add a payout address first' : ''}>
           {paying ? <Spinner light /> : `Request payout (${sol(me.balance)})`}
         </button>
       }>
@@ -130,11 +146,18 @@ export default function MyDesk({ me, status, refreshMe, toast, setView }: AppCtx
           )}
       </Section>
 
-      <Section title={`My passes (${passes?.length ?? '…'})`} right={<button className="label hover:text-ink" onClick={() => setView('registry')}>Open registry</button>}>
+      <Section title={`My passes (${passes?.length ?? '…'})`} right={<span className="label">Wear one to earn its boost</span>}>
         {!passes ? <div className="panel-pad text-sm text-ink-soft">Opening locker…</div> :
           passes.length === 0 ? <Empty title="Locker empty" hint={`Every ${me.mine.needed} shifts mines a pass automatically.`} /> : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {passes.map((p) => <PassCard key={p.id} pass={p} />)}
+              {passes.map((p) => (
+                <div key={p.id} className="space-y-1.5">
+                  <PassCard pass={p} />
+                  {p.equipped
+                    ? <button className="btn-green w-full text-xs" onClick={() => equip(null)}>★ Wearing — take off</button>
+                    : <button className="btn-line w-full text-xs" onClick={() => equip(p.id)}>Wear (+{Math.round((p.boost - 1) * 100)}%)</button>}
+                </div>
+              ))}
             </div>
           )}
       </Section>

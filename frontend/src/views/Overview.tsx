@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowRight, BadgeCheck, ExternalLink, FileText, Pickaxe, Banknote } from 'lucide-react';
 import type { AppCtx } from '../App';
 import { api, compact, sol, when } from '../lib/api';
-import type { Feed, RegistryTier, Vault } from '../lib/api';
+import type { Feed, Stats } from '../lib/api';
 import { Section, StatusTag } from '../ui';
 
 const HERO_PASSES = [263, 61, 777, 42];
@@ -11,27 +11,22 @@ const img = (id: number) => `/nft/images/${String(id).padStart(3, '0')}.png`;
 
 export default function Overview({ me, status, setView, openSignIn }: AppCtx) {
   const [feed, setFeed] = useState<Feed | null>(null);
-  const [vault, setVault] = useState<Vault | null>(null);
-  const [mined, setMined] = useState<number | null>(null);
-  const [workers, setWorkers] = useState<number | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null);
 
   useEffect(() => {
     api<Feed>('/api/feed').then(setFeed).catch(() => {});
-    api<Vault>('/api/vault').then(setVault).catch(() => {});
-    api<{ tiers: RegistryTier[] }>('/api/passes/registry')
-      .then((r) => setMined(r.tiers.reduce((s, t) => s + t.mined, 0))).catch(() => {});
-    api<{ leaders: unknown[] }>('/api/leaderboard').then((r) => setWorkers(r.leaders.length)).catch(() => {});
+    api<Stats>('/api/stats').then(setStats).catch(() => {});
   }, []);
 
   return (
     <div className="space-y-8">
       {/* ticker strip */}
       <div className="panel px-4 py-2 flex flex-wrap gap-x-8 gap-y-1 font-mono text-[11px] uppercase tracking-wider">
-        <span>Wages paid <b>{vault ? sol(vault.totalPaid, 2) : '—'}</b></span>
-        <span>Owed to workers <b>{vault ? sol(vault.totalOwed, 2) : '—'}</b></span>
-        <span>Passes mined <b>{mined ?? '—'}/1000</b></span>
-        <span>Workers on payroll <b>{workers ?? '—'}</b></span>
-        <span className={vault?.mode === 'live' ? 'text-green' : 'text-ink-soft'}>Vault {vault?.mode === 'live' ? 'live' : 'pre-launch'}</span>
+        <span>Wages paid <b>{stats ? sol(stats.totalPaid, 2) : '—'}</b></span>
+        <span>Owed to workers <b>{stats ? sol(stats.totalOwed, 2) : '—'}</b></span>
+        <span>Passes mined <b>{stats ? `${stats.mined}/${stats.totalPasses}` : '—'}</b></span>
+        <span>Workers on payroll <b>{stats?.workers ?? '—'}</b></span>
+        <span className={status.payoutMode === 'live' ? 'text-green' : 'text-ink-soft'}>Vault {status.payoutMode === 'live' ? 'live' : 'pre-launch'}</span>
       </div>
 
       {/* hero */}
@@ -39,16 +34,17 @@ export default function Overview({ me, status, setView, openSignIn }: AppCtx) {
         <div className="space-y-5">
           <div className="label">Employment bulletin · now hiring</div>
           <h1 className="font-display text-3xl md:text-4xl leading-[1.05] uppercase">
-            The market is rough.<br />People need work.
+            The market is<br /><span className="text-green">waking up.</span><br />Everybody eats.
           </h1>
           <p className="text-ink-soft max-w-lg">
-            APEPLOYEE is the memecoin that hires. Take a job, post about {status.ticker} on X,
-            and earn SOL wages from creator fees — while numbered Worker Passes mine to your
-            locker and raise your pay. Every shill, payout, and pass is on the public record below.
+            New money is flooding into the space — and fresh traders need a bankroll to start.
+            APEPLOYEE is the memecoin that <b className="text-ink">hires you to bring them in</b>:
+            take a job, post about {status.ticker} on X, and earn SOL wages from creator fees.
+            More traders, more fees, bigger bags. Win-win for the whole troop.
           </p>
           <ul className="space-y-2 text-sm max-w-lg">
             <li className="flex gap-2.5"><BadgeCheck className="text-green shrink-0 mt-0.5" size={16} /><span><b>No wallet connect, ever.</b> Your X account is your employee ID; wages go to whatever address you paste.</span></li>
-            <li className="flex gap-2.5"><Pickaxe className="text-green shrink-0 mt-0.5" size={16} /><span>Every {status.mineEvery} shifts mines a Worker Pass from the 1000-piece registry — your best pass boosts pay up to 1.5x.</span></li>
+            <li className="flex gap-2.5"><Pickaxe className="text-green shrink-0 mt-0.5" size={16} /><span>Every {status.mineEvery} shifts mines a Worker Pass from the 1000-piece registry — <b>wear one</b> to boost your pay up to 1.5x.</span></li>
             <li className="flex gap-2.5"><Banknote className="text-green shrink-0 mt-0.5" size={16} /><span>Public payroll: every payment is listed with its destination and transaction proof.</span></li>
           </ul>
           <div className="flex gap-3 flex-wrap">

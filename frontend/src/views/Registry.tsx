@@ -61,7 +61,10 @@ export default function Registry(_ctx: AppCtx) {
         <span className="label ml-auto">{data ? `${data.total} matching` : ''}</span>
       </div>
 
-      {data && (
+      {data && data.passes.length === 0 && (
+        <div className="panel-pad text-center py-8 text-sm text-ink-soft">No passes match this filter.</div>
+      )}
+      {data && data.passes.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
           {data.passes.map((p) => <PassCard key={p.id} pass={p} owner={p.owner} dense />)}
         </div>
