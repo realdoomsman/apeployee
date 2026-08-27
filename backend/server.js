@@ -568,8 +568,12 @@ app.get('/api/stats', async (_req, res) => {
 // ---------- payouts (idempotent, reconciled) ----------
 // Manual payouts convert wage credits 1:1. PAYDAY pool runs pass a poolShare —
 // the SOL actually sent — which can exceed the worker's credits (vault bonus).
-async function executePayout(user, poolShare = null) {
-  const credits = Math.round(user.balance);
+// consumeCredits: how many credits this payout burns (payday caps burn only the
+// proportional part, so a capped worker keeps weight for future cycles).
+async function executePayout(user, poolShare = null, consumeCredits = null) {
+  const credits = consumeCredits != null
+    ? Math.max(1, Math.min(Math.round(consumeCredits), Math.round(user.balance)))
+    : Math.round(user.balance);
   const amount = poolShare != null ? Math.round(poolShare) : credits;
   if (credits <= 0) return { error: 'no wages accrued yet' };
   if (amount < MIN_PAYOUT_LAMPORTS) return { error: `minimum payout is ${MIN_PAYOUT_LAMPORTS / 1e9} SOL` };
@@ -744,11 +748,24 @@ cron.schedule('*/10 * * * *', guarded(async () => {
   const totalW = weighted.reduce((s, x) => s + x.w, 0);
   if (totalW <= 0) return;
 
+  // Fairness caps — no single worker can drain the pool. Anything capped stays
+  // in the vault for future cycles; the worker keeps the unspent credit weight.
+  const MAXPCT = Math.min(100, Math.max(1, Number(process.env.PAYDAY_MAX_SHARE_PCT || 25))) / 100;
+  const MAXCYCLE = Math.round(Number(process.env.PAYDAY_MAX_SOL || 0.25) * 1e9);
+  const DAILYMAX = Math.round(Number(process.env.PAYDAY_DAILY_MAX_SOL || 0.75) * 1e9);
+  const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+
   console.log(`[payday] pool ${(pool / 1e9).toFixed(4)} SOL across ${workers.length} worker(s)`);
   for (const { u, w } of weighted) {
-    const share = Math.floor(pool * (w / totalW));
-    if (share < MIN_PAYOUT_LAMPORTS) continue; // dust rolls over — credits are kept for next payday
-    const r = await executePayout(u, share);
+    const uncapped = Math.floor(pool * (w / totalW));
+    const paidToday = Math.round((await prisma.payment.aggregate({
+      _sum: { amount: true },
+      where: { userId: u.id, status: { in: ['COMPLETED', 'PENDING'] }, createdAt: { gte: dayStart } },
+    }))._sum.amount || 0);
+    const share = Math.min(uncapped, Math.floor(pool * MAXPCT), MAXCYCLE, Math.max(0, DAILYMAX - paidToday));
+    if (share < MIN_PAYOUT_LAMPORTS) continue; // dust/capped-out rolls over — credits are kept
+    const consume = Math.ceil(Math.round(u.balance) * (share / uncapped));
+    const r = await executePayout(u, share, consume);
     if (r.error) console.error(`[payday] @${u.xUsername}: ${r.error}`);
   }
 }));
