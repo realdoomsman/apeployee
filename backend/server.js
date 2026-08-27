@@ -15,6 +15,7 @@ const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const nacl = require('tweetnacl');
 const crypto = require('crypto');
+const cron = require('node-cron');
 
 dotenv.config();
 
@@ -631,33 +632,50 @@ app.post('/api/payments/request', authenticateToken, async (req, res) => {
     const { amount } = req.body;
     const userId = req.user.userId;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    // Validate amount
+    if (!amount || isNaN(amount) || amount <= 0 || !isFinite(amount)) {
+      return res.status(400).json({ error: 'Invalid amount' });
     }
 
-    if (user.totalEarnings < amount) {
-      return res.status(400).json({ error: 'Insufficient earnings' });
+    const minPayout = parseFloat(process.env.MIN_PAYOUT || '0.001');
+    if (amount < minPayout) {
+      return res.status(400).json({ error: `Minimum payout is ${minPayout} SOL` });
     }
 
-    // Create payment record
-    const payment = await prisma.payment.create({
-      data: {
-        userId,
-        amount,
-        currency: 'SOL',
-        type: 'SHILL_EARNINGS',
-        status: 'PENDING'
+    // Atomic transaction: check balance, transfer, decrement
+    const result = await prisma.$transaction(async (tx) => {
+      // Get fresh user state with lock
+      const user = await tx.user.findUnique({
+        where: { id: userId }
+      });
+
+      if (!user) {
+        throw new Error('User not found');
       }
-    });
 
-    // Process payment on-chain (if vault wallet available)
-    if (vaultWallet) {
-      try {
+      if (user.totalEarnings < amount) {
+        throw new Error('Insufficient earnings');
+      }
+
+      // Create payment record
+      const payment = await tx.payment.create({
+        data: {
+          userId,
+          amount,
+          currency: 'SOL',
+          type: 'SHILL_EARNINGS',
+          status: 'PENDING'
+        }
+      });
+
+      // Process payment on-chain (if vault wallet available)
+      if (vaultWallet) {
         const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
+
+        if (!Number.isInteger(lamports) || lamports <= 0) {
+          throw new Error('Invalid lamports amount');
+        }
+
         const transaction = new Transaction().add(
           SystemProgram.transfer({
             fromPubkey: vaultWallet.publicKey,
@@ -668,7 +686,8 @@ app.post('/api/payments/request', authenticateToken, async (req, res) => {
 
         const signature = await sendAndConfirmTransaction(connection, transaction, [vaultWallet]);
 
-        await prisma.payment.update({
+        // Update payment status
+        await tx.payment.update({
           where: { id: payment.id },
           data: {
             status: 'COMPLETED',
@@ -677,14 +696,16 @@ app.post('/api/payments/request', authenticateToken, async (req, res) => {
           }
         });
 
-        // Update user earnings
-        await prisma.user.update({
+        // Decrement user earnings (atomic within transaction)
+        await tx.user.update({
           where: { id: userId },
-          data: { totalEarnings: { decrement: amount } }
+          data: {
+            totalEarnings: { decrement: amount }
+          }
         });
 
         // Record vault transaction
-        await prisma.vaultTransaction.create({
+        await tx.vaultTransaction.create({
           data: {
             userId,
             type: 'EARNING_PAYOUT',
@@ -694,30 +715,44 @@ app.post('/api/payments/request', authenticateToken, async (req, res) => {
           }
         });
 
-        return res.json({ success: true, payment, transactionHash: signature });
-      } catch (solanaError) {
-        console.error('Solana payment error:', solanaError);
-        await prisma.payment.update({
+        return { payment, transactionHash: signature, simulated: false };
+      } else {
+        // Simulation mode - use SIMULATED status, not COMPLETED
+        await tx.payment.update({
           where: { id: payment.id },
-          data: { status: 'FAILED' }
+          data: {
+            status: 'SIMULATED',
+            transactionHash: 'simulated-' + Date.now(),
+            processedAt: new Date()
+          }
         });
-        return res.status(500).json({ error: 'Payment failed on-chain' });
-      }
-    } else {
-      // Simulation mode
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: 'SIMULATED',
-          transactionHash: 'simulated-' + Date.now(),
-          processedAt: new Date()
-        }
-      });
 
-      return res.json({ success: true, payment, simulated: true });
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            totalEarnings: { decrement: amount }
+          }
+        });
+
+        return { payment, simulated: true };
+      }
+    });
+
+    // Process referral bonus after successful payout (outside transaction)
+    if (result.success && result.payment) {
+      processReferralBonus(userId, amount).catch(err => {
+        console.error('Failed to process referral bonus:', err);
+      });
     }
+
+    res.json({ success: true, ...result });
   } catch (error) {
     console.error('Payout request error:', error);
+
+    if (error.message === 'Insufficient earnings') {
+      return res.status(400).json({ error: 'Insufficient earnings' });
+    }
+
     res.status(500).json({ error: 'Failed to request payout' });
   }
 });
@@ -731,17 +766,21 @@ app.get('/api/leaderboard', async (req, res) => {
   try {
     const { limit = 10, period = 'all' } = req.query;
 
-    let dateFilter = {};
-    if (period === 'week') {
-      dateFilter = { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) };
-    } else if (period === 'month') {
-      dateFilter = { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
-    }
+    // For 'all' period, don't filter by shillRecords (includes users with zero shills)
+    const whereClause = period === 'all'
+      ? undefined
+      : {
+          shillRecords: {
+            some: {
+              createdAt: period === 'week'
+                ? { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+                : { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+            }
+          }
+        };
 
     const leaderboard = await prisma.user.findMany({
-      where: {
-        shillRecords: dateFilter ? { some: { createdAt: dateFilter } } : undefined
-      },
+      where: whereClause,
       orderBy: { totalEarnings: 'desc' },
       take: parseInt(limit),
       select: {
@@ -785,7 +824,7 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
       data: {
         referrerId,
         refereeId,
-        bonusAmount: 0,
+        bonusAmount: 0, // Will be calculated when referee earns
         bonusPaid: false
       },
       include: {
@@ -800,6 +839,68 @@ app.post('/api/referrals', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to create referral' });
   }
 });
+
+// Calculate and pay referral bonus (10% of referee's first 30 days earnings)
+async function processReferralBonus(refereeId, earningsPaid) {
+  try {
+    const referral = await prisma.referral.findUnique({
+      where: { refereeId },
+      include: {
+        referrer: true,
+        referee: true
+      }
+    });
+
+    if (!referral || referral.bonusPaid) {
+      return;
+    }
+
+    // Check if referee is within first 30 days
+    const daysSinceJoin = (new Date() - new Date(referral.referee.createdAt)) / (1000 * 60 * 60 * 24);
+    if (daysSinceJoin > 30) {
+      return;
+    }
+
+    // Calculate 10% bonus
+    const bonus = earningsPaid * 0.10;
+
+    if (bonus <= 0) {
+      return;
+    }
+
+    // Credit the referrer
+    await prisma.$transaction(async (tx) => {
+      // Update referral record
+      await tx.referral.update({
+        where: { id: referral.id },
+        data: { bonusAmount: bonus, bonusPaid: true }
+      });
+
+      // Add bonus to referrer's earnings
+      await tx.user.update({
+        where: { id: referral.referrerId },
+        data: { totalEarnings: { increment: bonus } }
+      });
+
+      // Create a payment record for the bonus
+      await tx.payment.create({
+        data: {
+          userId: referral.referrerId,
+          amount: bonus,
+          currency: 'SOL',
+          type: 'REFERRAL_BONUS',
+          status: 'COMPLETED',
+          description: `10% bonus from ${referral.referee.walletAddress}`,
+          processedAt: new Date()
+        }
+      });
+
+      console.log(`✅ Paid referral bonus: ${bonus} SOL to ${referral.referrer.walletAddress} from ${referral.referee.walletAddress}`);
+    });
+  } catch (error) {
+    console.error('Referral bonus error:', error);
+  }
+}
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -920,6 +1021,150 @@ function scheduleMetricsRepoll(shillId, tweetId, userId) {
     }, delay);
   });
 }
+
+// ============================================
+// AUTO-PAY CRON JOB (P3.11)
+// ============================================
+
+// Schedule: daily at midnight UTC (adjust cron expression as needed)
+cron.schedule('0 0 * * *', async () => {
+  if (process.env.AUTO_PAY_DISABLED === 'true') {
+    console.log('Auto-pay disabled via env var');
+    return;
+  }
+
+  console.log('🔄 Starting auto-pay cron job...');
+
+  try {
+    const minBalance = parseFloat(process.env.AUTO_PAY_MIN_BALANCE || '0.001');
+    const perUserCap = parseFloat(process.env.AUTO_PAY_PER_USER_CAP || '10');
+    const totalRunCap = parseFloat(process.env.AUTO_PAY_TOTAL_RUN_CAP || '1000');
+
+    // Find users with sufficient earnings
+    const eligibleUsers = await prisma.user.findMany({
+      where: {
+        totalEarnings: { gte: minBalance }
+      },
+      take: 100 // Safety limit
+    });
+
+    console.log(`Found ${eligibleUsers.length} eligible users for auto-pay`);
+
+    let totalPaid = 0;
+    let processedCount = 0;
+
+    for (const user of eligibleUsers) {
+      // Check total run cap
+      if (totalPaid >= totalRunCap) {
+        console.log(`Total run cap (${totalRunCap} SOL) reached`);
+        break;
+      }
+
+      const payoutAmount = Math.min(user.totalEarnings, perUserCap);
+
+      if (payoutAmount < minBalance) {
+        continue;
+      }
+
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          // Fresh user state
+          const freshUser = await tx.user.findUnique({
+            where: { id: user.id }
+          });
+
+          if (!freshUser || freshUser.totalEarnings < payoutAmount) {
+            return { skipped: true, reason: 'Insufficient balance' };
+          }
+
+          // Create payment record
+          const payment = await tx.payment.create({
+            data: {
+              userId: user.id,
+              amount: payoutAmount,
+              currency: 'SOL',
+              type: 'AUTO_PAYOUT',
+              status: 'PENDING'
+            }
+          });
+
+          // Process on-chain if vault wallet available
+          if (vaultWallet) {
+            const lamports = Math.floor(payoutAmount * LAMPORTS_PER_SOL);
+
+            const transaction = new Transaction().add(
+              SystemProgram.transfer({
+                fromPubkey: vaultWallet.publicKey,
+                toPubkey: new PublicKey(user.walletAddress),
+                lamports
+              })
+            );
+
+            const signature = await sendAndConfirmTransaction(connection, transaction, [vaultWallet]);
+
+            await tx.payment.update({
+              where: { id: payment.id },
+              data: {
+                status: 'COMPLETED',
+                transactionHash: signature,
+                processedAt: new Date()
+              }
+            });
+
+            await tx.user.update({
+              where: { id: user.id },
+              data: { totalEarnings: { decrement: payoutAmount } }
+            });
+
+            await tx.vaultTransaction.create({
+              data: {
+                userId: user.id,
+                type: 'AUTO_PAYOUT',
+                amount: payoutAmount,
+                description: `Auto-pay cron: ${signature}`,
+                transactionHash: signature
+              }
+            });
+
+            return { success: true, amount: payoutAmount, signature, simulated: false };
+          } else {
+            await tx.payment.update({
+              where: { id: payment.id },
+              data: {
+                status: 'SIMULATED',
+                transactionHash: 'auto-simulated-' + Date.now(),
+                processedAt: new Date()
+              }
+            });
+
+            await tx.user.update({
+              where: { id: user.id },
+              data: { totalEarnings: { decrement: payoutAmount } }
+            });
+
+            return { success: true, amount: payoutAmount, simulated: true };
+          }
+        });
+
+        if (result.success) {
+          totalPaid += result.amount;
+          processedCount++;
+          console.log(`✅ Paid ${result.amount} SOL to ${user.walletAddress} (${result.simulated ? 'simulated' : 'on-chain'})`);
+        } else if (!result.skipped) {
+          console.log(`⚠️ Skipped ${user.walletAddress}: ${result.reason}`);
+        }
+      } catch (error) {
+        console.error(`❌ Failed to pay ${user.walletAddress}:`, error.message);
+      }
+    }
+
+    console.log(`✅ Auto-pay completed: ${processedCount} users, ${totalPaid.toFixed(4)} SOL total`);
+  } catch (error) {
+    console.error('❌ Auto-pay cron error:', error);
+  }
+});
+
+console.log('⏰ Auto-pay cron job scheduled (daily at midnight UTC)');
 
 // ============================================
 // ERROR HANDLING
