@@ -48,7 +48,9 @@ async function claimViaDistribute(conn) {
   tx.feePayer = creator.publicKey;
   tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
   tx.sign(creator);
-  const sig = await conn.sendRawTransaction(tx.serialize());
+  // preflightCommitment must match the blockhash commitment — the default
+  // ('finalized') can't see a 'confirmed' blockhash yet -> "Simulation failed".
+  const sig = await conn.sendRawTransaction(tx.serialize(), { preflightCommitment: 'confirmed' });
   await conn.confirmTransaction(sig, 'confirmed');
 
   const after = await conn.getBalance(creator.publicKey);
@@ -66,7 +68,7 @@ async function claimViaPumpPortal(conn) {
   }, { responseType: 'arraybuffer' });
   const tx = VersionedTransaction.deserialize(new Uint8Array(res.data));
   tx.sign([creator]);
-  const sig = await conn.sendRawTransaction(tx.serialize());
+  const sig = await conn.sendRawTransaction(tx.serialize(), { preflightCommitment: 'confirmed' });
   await conn.confirmTransaction(sig, 'confirmed');
   const after = await conn.getBalance(creator.publicKey);
   return { signature: sig, claimed: Math.max(0, after - before) };
@@ -76,7 +78,14 @@ async function claimViaPumpPortal(conn) {
 async function claimFees() {
   if (!enabled()) return null;
   const conn = new Connection(RPC, 'confirmed');
-  return MODE === 'distribute' ? claimViaDistribute(conn) : claimViaPumpPortal(conn);
+  try {
+    return await (MODE === 'distribute' ? claimViaDistribute(conn) : claimViaPumpPortal(conn));
+  } catch (e) {
+    // Flatten multi-line SendTransactionErrors (+ last program logs) into one
+    // log line so the real failure reason survives in hosted log viewers.
+    const logs = Array.isArray(e.logs) ? ` | logs: ${e.logs.slice(-3).join(' ;; ')}` : '';
+    throw new Error(String(e.message || e).replace(/\s*\n\s*/g, ' | ') + logs);
+  }
 }
 
 module.exports = { enabled, claimFees, mode: MODE, mint: MINT };
