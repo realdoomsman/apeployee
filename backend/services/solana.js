@@ -53,7 +53,18 @@ async function sendLamports(toAddress, lamports) {
     SystemProgram.transfer({ fromPubkey: vault.publicKey, toPubkey: new PublicKey(toAddress), lamports: amount })
   );
   tx.sign(vault);
-  const signature = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 5 });
+  // The signature is fixed once signed — capture it BEFORE sending so that even if
+  // sendRawTransaction throws after the tx reached the network, the caller still has
+  // a signature to reconcile against (never a blind refund → no double-spend).
+  const enc = bs58.default || bs58;
+  const signature = enc.encode(tx.signature);
+  try {
+    await connection.sendRawTransaction(tx.serialize(), { maxRetries: 5 });
+  } catch (e) {
+    // Broadcast ambiguous: return the signature so the caller holds PENDING and the
+    // reconcile cron settles it (COMPLETED if it landed, refund if it never does).
+    return { signature, confirmed: false, broadcastError: e.message };
+  }
   try {
     await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
     return { signature, confirmed: true };

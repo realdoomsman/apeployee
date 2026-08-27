@@ -122,7 +122,6 @@ function RecordsShills({ feed }: { feed: Feed | null }) {
                 <a className="inline-flex items-center gap-1 text-sm hover:underline" href={s.url} target="_blank" rel="noreferrer">
                   <FileText size={13} className="text-ink-soft" /> {compact(s.likes)} likes · {compact(s.views)} views <ExternalLink size={11} className="text-ink-soft" />
                 </a>
-                {s.simulated && <span className="label ml-1.5">unverified</span>}
               </td>
               <td className="td font-mono text-xs text-right whitespace-nowrap">{sol(s.earned)}</td>
             </tr>

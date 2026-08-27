@@ -169,7 +169,7 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
               {shills.slice(0, 6).map((s) => (
                 <div key={s.id} className="px-3 py-2.5 flex items-center gap-3 border-b border-line last:border-0">
                   <a className="flex-1 min-w-0 text-sm truncate hover:underline" href={`https://x.com/i/web/status/${s.tweetId}`} target="_blank" rel="noreferrer">{s.text || `post ${s.tweetId}`}</a>
-                  <span className="label shrink-0">{compact(s.likes)} likes · {compact(s.views)} views{s.simulated ? ' · unverified' : ''}</span>
+                  <span className="label shrink-0">{compact(s.likes)} likes · {compact(s.views)} views</span>
                   <span className="font-mono text-xs text-green shrink-0">+{sol(s.earned)}</span>
                 </div>
               ))}

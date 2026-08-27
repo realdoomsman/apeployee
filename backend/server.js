@@ -183,6 +183,12 @@ app.get('/api/status', (_req, res) => {
 app.post('/api/auth/verify/begin', (req, res) => {
   const handle = String(req.body.handle || '').replace(/^@/, '').trim();
   if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return res.status(400).json({ error: 'that does not look like an X handle' });
+  // Bound the map so begin can't be spammed into unbounded memory growth.
+  if (pendingVerify.size > 5000) {
+    const now = Date.now();
+    for (const [k, v] of pendingVerify) if (v.expires < now) pendingVerify.delete(k);
+    if (pendingVerify.size > 5000) return res.status(503).json({ error: 'verification is busy — try again in a minute' });
+  }
   const code = `APE-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   const verifyId = crypto.randomBytes(16).toString('hex');
   pendingVerify.set(verifyId, { handle, code, expires: Date.now() + 15 * 60_000 });
@@ -195,7 +201,10 @@ app.post('/api/auth/verify/begin', (req, res) => {
 app.post('/api/auth/verify/confirm', async (req, res) => {
   try {
     const entry = pendingVerify.get(String(req.body.verifyId || ''));
-    if (!entry) return res.status(400).json({ error: 'verification expired — start again' });
+    if (!entry || entry.expires < Date.now()) {
+      pendingVerify.delete(String(req.body.verifyId || ''));
+      return res.status(400).json({ error: 'verification expired — start again' });
+    }
     const raw = String(req.body.url || '').trim();
     const m = raw.match(TWEET_URL) || raw.match(/^(\d{5,25})$/);
     if (!m) return res.status(400).json({ error: 'paste the link to the tweet you just posted' });
@@ -218,7 +227,12 @@ app.post('/api/auth/verify/confirm', async (req, res) => {
     if (!user) {
       const clash = await prisma.user.findUnique({ where: { xUsername: tweet.authorHandle } });
       if (clash) await prisma.user.update({ where: { id: clash.id }, data: { xUsername: `${tweet.authorHandle}~old-${clash.id.slice(-5)}` } });
-      user = await prisma.user.create({ data: { xId: tweet.authorId, xUsername: tweet.authorHandle, xVerified: true } });
+      try {
+        user = await prisma.user.create({ data: { xId: tweet.authorId, xUsername: tweet.authorHandle, xVerified: true } });
+      } catch (err) {
+        if (err.code === 'P2002') user = await prisma.user.findUnique({ where: { xId: tweet.authorId } }); // lost a create race
+        if (!user) throw err;
+      }
     } else if (!user.xVerified || user.xUsername !== tweet.authorHandle) {
       user = await prisma.user.update({ where: { id: user.id }, data: { xVerified: true, xUsername: tweet.authorHandle } });
     }
@@ -320,7 +334,15 @@ app.post('/api/jobs/:id/apply', requireAuth, async (req, res) => {
 });
 
 // ---------- shills ----------
-const TWEET_URL = /(?:x|twitter)\.com\/[^/]+\/status\/(\d{5,25})/i;
+// Matches /user/status/ID, /i/web/status/ID, /i/status/ID (x.com or twitter.com).
+const TWEET_URL = /(?:x|twitter)\.com\/(?:[^/]+\/status|i\/web\/status|i\/status)\/(\d{5,25})/i;
+
+// The post must mention the ticker as a cashtag or a standalone word (not too strict).
+const TICKER_BARE = TICKER.replace(/^\$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const TICKER_RE = new RegExp('(^|[^A-Za-z0-9])\\$?' + TICKER_BARE + '([^A-Za-z0-9]|$)', 'i');
+function mentionsTicker(text) {
+  return TICKER_RE.test(String(text || ''));
+}
 
 app.get('/api/shills', requireAuth, async (req, res) => {
   const shills = await prisma.shillRecord.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: 'desc' }, take: 50 });
@@ -350,10 +372,10 @@ app.post('/api/shills', requireAuth, async (req, res) => {
     if (tweet.authorId !== req.user.xId) {
       return res.status(400).json({ error: 'that post is not from your X account — shill with your own posts' });
     }
-    if (!tweet.text.toUpperCase().includes(TICKER.toUpperCase()) && !tweet.text.toUpperCase().includes(TICKER.replace('$', '').toUpperCase())) {
+    if (!mentionsTicker(tweet.text)) {
       return res.status(400).json({ error: `the post has to mention ${TICKER} — that is the whole job` });
     }
-    const metrics = tweet; const text = tweet.text; const simulated = false;
+    const metrics = tweet; const text = tweet.text;
 
     // Recompute the worn-pass boost right now so a stale nftBoost can never pay a
     // boost without an equipped pass (enforces "must wear to earn the boost").
@@ -367,16 +389,18 @@ app.post('/api/shills', requireAuth, async (req, res) => {
         data: {
           tweetId, userId: req.user.id, text, mult,
           likes: metrics.likes, retweets: metrics.retweets, replies: metrics.replies, views: metrics.views,
-          earned, simulated, lastPolledAt: new Date(),
+          earned, simulated: false, lastPolledAt: new Date(),
         },
       });
-      const newShills = req.user.totalShills + 1;
-      const newRank = rankFor(newShills);
-      await tx.user.update({
+      // Atomic increment → use the RETURNED count so concurrent submits can't lose
+      // updates or both trip the same mining milestone.
+      const updated = await tx.user.update({
         where: { id: req.user.id },
-        data: { totalShills: newShills, balance: { increment: earned }, lifetimeEarned: { increment: earned }, apeRank: newRank.name },
+        data: { totalShills: { increment: 1 }, balance: { increment: earned }, lifetimeEarned: { increment: earned } },
       });
-      const minedPass = newShills % nft.MINE_EVERY === 0 ? await nft.minePass(tx, req.user.id) : null;
+      const newRank = rankFor(updated.totalShills);
+      if (newRank.name !== updated.apeRank) await tx.user.update({ where: { id: req.user.id }, data: { apeRank: newRank.name } });
+      const minedPass = updated.totalShills % nft.MINE_EVERY === 0 ? await nft.minePass(tx, req.user.id) : null;
       return { shill, minedPass, rankedUp: newRank.name !== req.user.apeRank ? newRank : null };
     });
 
@@ -555,8 +579,15 @@ function mintOnChain(pass, user) {
 }
 
 // ---------- crons ----------
+// Each cron is wrapped so a slow run never overlaps the next tick (which would
+// double-credit / double-refund). `locked` is a simple in-process mutex.
+function guarded(fn) {
+  let locked = false;
+  return async () => { if (locked) return; locked = true; try { await fn(); } catch (e) { console.error('[cron]', e.message); } finally { locked = false; } };
+}
+
 // Re-poll engagement and credit growth at the FROZEN per-shill multiplier.
-cron.schedule('*/10 * * * *', async () => {
+cron.schedule('*/10 * * * *', guarded(async () => {
   const cutoff = new Date(Date.now() - 48 * 3600_000);
   const stale = new Date(Date.now() - 30 * 60_000);
   const shills = await prisma.shillRecord.findMany({ where: { createdAt: { gte: cutoff }, lastPolledAt: { lte: stale } }, take: 50 });
@@ -564,9 +595,13 @@ cron.schedule('*/10 * * * *', async () => {
     try {
       const m = await twitter.fetchTweetPublic(s.tweetId);
       const total = Math.round(metricsToLamports(m) * s.mult); // frozen multiplier — no windfall
+      // Claim this poll atomically (bump lastPolledAt with a guard) so an overlapping
+      // run can't read the same stale earned and credit the delta twice.
+      const claimed = await prisma.shillRecord.updateMany({ where: { id: s.id, lastPolledAt: s.lastPolledAt }, data: { lastPolledAt: new Date() } });
+      if (claimed.count === 0) continue;
       const delta = Math.max(0, total - Math.round(s.earned));
       await prisma.$transaction([
-        prisma.shillRecord.update({ where: { id: s.id }, data: { likes: m.likes, retweets: m.retweets, replies: m.replies, views: m.views, earned: { increment: delta }, lastPolledAt: new Date() } }),
+        prisma.shillRecord.update({ where: { id: s.id }, data: { likes: m.likes, retweets: m.retweets, replies: m.replies, views: m.views, earned: { increment: delta } } }),
         ...(delta > 0 ? [prisma.user.update({ where: { id: s.userId }, data: { balance: { increment: delta }, lifetimeEarned: { increment: delta } } })] : []),
       ]);
     } catch (e) {
@@ -574,48 +609,49 @@ cron.schedule('*/10 * * * *', async () => {
       console.error(`[poll] ${s.tweetId}: ${e.message}`);
     }
   }
-});
+}));
 
-// Reconcile PENDING live payouts against the chain.
-cron.schedule('*/5 * * * *', async () => {
+// Reconcile PENDING live payouts against the chain (atomic claim before acting).
+cron.schedule('*/5 * * * *', guarded(async () => {
   if (!solana.isLive()) return;
   const pend = await prisma.payment.findMany({ where: { status: 'PENDING', signature: { not: null } } });
   for (const p of pend) {
     const state = await solana.signatureLanded(p.signature);
+    // Stuck 'unknown' for >30 min after a broadcast almost certainly means the
+    // blockhash expired and the tx was dropped; refund so funds aren't lost.
+    const age = Date.now() - new Date(p.createdAt).getTime();
+    const drop = state === 'dropped' || (state === 'unknown' && age > 30 * 60_000);
     if (state === 'landed') {
-      await prisma.payment.update({ where: { id: p.id }, data: { status: 'COMPLETED' } });
-      await prisma.vaultEvent.create({ data: { type: 'PAYOUT', amount: -Math.round(p.amount), note: `reconciled payout ${p.id}` } });
-    } else if (state === 'dropped') {
-      await prisma.user.update({ where: { id: p.userId }, data: { balance: { increment: Math.round(p.amount) } } });
-      await prisma.payment.update({ where: { id: p.id }, data: { status: 'FAILED', note: 'dropped on-chain — balance refunded' } });
-    } // 'unknown' → leave PENDING for the next pass
+      const won = await prisma.payment.updateMany({ where: { id: p.id, status: 'PENDING' }, data: { status: 'COMPLETED' } });
+      if (won.count) await prisma.vaultEvent.create({ data: { type: 'PAYOUT', amount: -Math.round(p.amount), note: `reconciled payout ${p.id}` } });
+    } else if (drop) {
+      // Flip PENDING→FAILED atomically; only the winner refunds (no double-refund).
+      const won = await prisma.payment.updateMany({ where: { id: p.id, status: 'PENDING' }, data: { status: 'FAILED', note: state === 'dropped' ? 'dropped on-chain — refunded' : 'unconfirmed >30m — refunded' } });
+      if (won.count) await prisma.user.update({ where: { id: p.userId }, data: { balance: { increment: Math.round(p.amount) } } });
+    }
   }
-});
+}));
 
 // Auto-claim pump.fun creator fees into the vault (continuous funding).
-cron.schedule('*/3 * * * *', async () => {
+cron.schedule('*/3 * * * *', guarded(async () => {
   if (!pumpfun.enabled()) return;
-  try {
-    const r = await pumpfun.claimFees();
-    if (r && r.claimed > 0) {
-      await prisma.vaultEvent.create({ data: { type: 'FEE_SWEEP', amount: r.claimed, note: `claimed creator fees ${r.signature.slice(0, 8)}…` } });
-      console.log(`[fees] swept ${r.claimed} lamports`);
-    }
-  } catch (e) {
-    console.error('[fees] claim failed:', e.message);
+  const r = await pumpfun.claimFees();
+  if (r && r.claimed > 0) {
+    await prisma.vaultEvent.create({ data: { type: 'FEE_SWEEP', amount: r.claimed, note: `claimed creator fees ${r.signature.slice(0, 8)}…` } });
+    console.log(`[fees] swept ${r.claimed} lamports`);
   }
-});
+}));
 
 // Continuous distribution: pay every worker over the minimum, frequently.
-cron.schedule('*/10 * * * *', async () => {
+cron.schedule('*/10 * * * *', guarded(async () => {
   if (process.env.AUTOPAY !== 'true') return;
-  const users = await prisma.user.findMany({ where: { balance: { gte: MIN_PAYOUT_LAMPORTS }, payoutAddress: { not: null } } });
+  const users = await prisma.user.findMany({ where: { balance: { gte: MIN_PAYOUT_LAMPORTS }, payoutAddress: { not: null }, xVerified: true } });
   if (users.length) console.log(`[autopay] distributing to ${users.length} workers`);
   for (const u of users) {
     const r = await executePayout(u);
     if (r.error) console.error(`[autopay] @${u.xUsername}: ${r.error}`);
   }
-});
+}));
 
 // ---------- serve the built frontend (single-origin production) ----------
 const DIST = path.join(__dirname, '..', 'frontend', 'dist');

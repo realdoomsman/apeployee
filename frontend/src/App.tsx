@@ -282,7 +282,7 @@ export default function App() {
       {signInOpen && (
         <SignIn
           status={status}
-          onClose={() => setSignInOpen(false)}
+          onClose={() => { setSignInOpen(false); setPendingOpen(null); }}
           onAuthed={(u) => { setMe(u); setSignInOpen(false); setPendingOpen((p) => p ?? 'desk'); }}
         />
       )}

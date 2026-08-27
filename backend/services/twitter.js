@@ -35,16 +35,18 @@ async function fetchTweetPublic(tweetId) {
   if (!t || typeof t !== 'object' || !t.user || !t.user.id_str) {
     throw new Error('tweet not found, deleted, or from a protected account');
   }
-  const viewsRaw = (t.views && (t.views.count ?? t.views)) ?? t.view_count ?? 0;
+  // views may be a number, an object {count}, or an object without count.
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const viewsRaw = t.views && typeof t.views === 'object' ? t.views.count : (t.views ?? t.view_count);
   return {
     authorId: String(t.user.id_str),
     authorHandle: String(t.user.screen_name || ''),
     text: String(t.text || ''),
     createdAt: t.created_at || null,
-    likes: Number(t.favorite_count || 0),
-    replies: Number(t.conversation_count || t.reply_count || 0),
-    retweets: Number(t.retweet_count || t.quote_count || 0),
-    views: Number(viewsRaw || 0),
+    likes: num(t.favorite_count),
+    replies: num(t.conversation_count ?? t.reply_count),
+    retweets: num(t.retweet_count ?? t.quote_count),
+    views: num(viewsRaw),
   };
 }
 

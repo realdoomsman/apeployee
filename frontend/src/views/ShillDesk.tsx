@@ -81,7 +81,7 @@ export default function ShillDesk({ me, status, refreshMe, toast, celebrate, ran
                         </a>
                       </td>
                       <td className="td font-mono text-[11px] whitespace-nowrap">
-                        {compact(s.likes)} likes · {compact(s.retweets)} rt · {compact(s.views)} views{s.simulated && <span className="text-ink-soft"> · unverified</span>}
+                        {compact(s.likes)} likes · {compact(s.retweets)} rt · {compact(s.views)} views
                       </td>
                       <td className="td font-mono text-xs text-green text-right whitespace-nowrap">+{sol(s.earned)}</td>
                     </tr>
