@@ -566,16 +566,23 @@ app.get('/api/stats', async (_req, res) => {
 });
 
 // ---------- payouts (idempotent, reconciled) ----------
-async function executePayout(user) {
-  const amount = Math.round(user.balance);
+// Manual payouts convert wage credits 1:1. PAYDAY pool runs pass a poolShare —
+// the SOL actually sent — which can exceed the worker's credits (vault bonus).
+async function executePayout(user, poolShare = null) {
+  const credits = Math.round(user.balance);
+  const amount = poolShare != null ? Math.round(poolShare) : credits;
+  if (credits <= 0) return { error: 'no wages accrued yet' };
   if (amount < MIN_PAYOUT_LAMPORTS) return { error: `minimum payout is ${MIN_PAYOUT_LAMPORTS / 1e9} SOL` };
   // Real X verification is required to get paid (blocks handle-squatting for wages).
   if (!user.xVerified) return { error: 'verify your X account to get paid' };
   if (!user.payoutAddress) return { error: 'set a payout address first (Profile → payout address)' };
 
-  // Reserve atomically so concurrent requests can't double-pay.
-  const reserved = await prisma.user.updateMany({ where: { id: user.id, balance: { gte: amount } }, data: { balance: { decrement: amount } } });
+  // Consume the wage credits atomically so concurrent requests can't double-pay.
+  const reserved = await prisma.user.updateMany({ where: { id: user.id, balance: { gte: credits } }, data: { balance: { decrement: credits } } });
   if (reserved.count === 0) return { error: 'balance changed — try again' };
+  // Payday bonus (share beyond credits) counts toward lifetime earnings.
+  const bonus = Math.max(0, amount - credits);
+  if (bonus > 0) await prisma.user.update({ where: { id: user.id }, data: { lifetimeEarned: { increment: bonus } } });
 
   // Durable record BEFORE sending, so a crash mid-send is always reconcilable.
   const payment = await prisma.payment.create({ data: { userId: user.id, amount, address: user.payoutAddress, status: 'PENDING' } });
@@ -598,8 +605,8 @@ async function executePayout(user) {
     const held = await prisma.payment.update({ where: { id: payment.id }, data: { status: 'PENDING', signature, note: 'awaiting on-chain confirmation' } });
     return { payment: held, pending: true };
   } catch (e) {
-    // Pre-broadcast failure (no signature) → safe to refund.
-    await prisma.user.update({ where: { id: user.id }, data: { balance: { increment: amount } } });
+    // Pre-broadcast failure (no signature) → safe to refund the consumed credits.
+    await prisma.user.update({ where: { id: user.id }, data: { balance: { increment: credits }, ...(bonus > 0 ? { lifetimeEarned: { decrement: bonus } } : {}) } });
     await prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED', note: e.message } });
     return { error: 'transfer failed to broadcast — balance refunded' };
   }
@@ -708,14 +715,37 @@ cron.schedule('*/3 * * * *', guarded(async () => {
   }
 }));
 
-// Continuous distribution: pay every worker over the minimum, frequently.
+// PAYDAY: every cycle the WHOLE vault (minus a gas reserve) is split across
+// active workers, weighted by wage credits × the pass they're wearing right now.
+// The vault doesn't accumulate — fees flow straight through to the workforce.
+// Tunables: VAULT_RESERVE_SOL (default 0.1), PAYDAY_POOL_PCT (default 100).
 cron.schedule('*/10 * * * *', guarded(async () => {
-  if (process.env.AUTOPAY !== 'true') return;
-  const users = await prisma.user.findMany({ where: { balance: { gte: MIN_PAYOUT_LAMPORTS }, payoutAddress: { not: null }, xVerified: true } });
-  if (users.length) console.log(`[autopay] distributing to ${users.length} workers`);
-  for (const u of users) {
-    const r = await executePayout(u);
-    if (r.error) console.error(`[autopay] @${u.xUsername}: ${r.error}`);
+  if (process.env.AUTOPAY !== 'true' || !solana.isLive()) return;
+  const workers = await prisma.user.findMany({ where: { balance: { gt: 0 }, payoutAddress: { not: null }, xVerified: true } });
+  if (!workers.length) return;
+
+  let vaultBal;
+  try { vaultBal = await solana.getVaultBalance(); } catch { return; }
+  const RESERVE = Math.round(Number(process.env.VAULT_RESERVE_SOL || 0.1) * 1e9);
+  const PCT = Math.min(100, Math.max(0, Number(process.env.PAYDAY_POOL_PCT || 100))) / 100;
+  const pool = Math.max(0, Math.round((vaultBal - RESERVE) * PCT));
+  if (pool < MIN_PAYOUT_LAMPORTS) return;
+
+  // Weight = wage credits × currently worn boost (re-validated at payday).
+  const weighted = [];
+  for (const u of workers) {
+    const boost = await nft.refreshBoost(prisma, u.id);
+    weighted.push({ u, w: Math.round(u.balance) * boost });
+  }
+  const totalW = weighted.reduce((s, x) => s + x.w, 0);
+  if (totalW <= 0) return;
+
+  console.log(`[payday] pool ${(pool / 1e9).toFixed(4)} SOL across ${workers.length} worker(s)`);
+  for (const { u, w } of weighted) {
+    const share = Math.floor(pool * (w / totalW));
+    if (share < MIN_PAYOUT_LAMPORTS) continue; // dust rolls over — credits are kept for next payday
+    const r = await executePayout(u, share);
+    if (r.error) console.error(`[payday] @${u.xUsername}: ${r.error}`);
   }
 }));
 

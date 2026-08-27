@@ -133,7 +133,7 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
               {syncing ? <Spinner /> : 'Sync wallet'}
             </button>
           </div>
-          <div className="label">Minimum payout {((status.minPayout ?? 5_000_000) / 1e9)} SOL{status.autopay ? ' · auto-pay runs every 10 min' : ''}{status.payoutMode !== 'live' ? ' · settles on-chain at launch' : ''}</div>
+          <div className="label">Minimum payout {((status.minPayout ?? 5_000_000) / 1e9)} SOL{status.autopay ? ' · PAYDAY every 10 min: the vault pool is split across active workers — your cut = your shifts × the pass you are wearing' : ''}{status.payoutMode !== 'live' ? ' · settles on-chain at launch' : ''}</div>
           <div className="label">Bought a Worker Pass on Magic Eden or Tensor? File that wallet above, hit Sync — the pass and its boost become yours.</div>
         </div>
       </Section>
