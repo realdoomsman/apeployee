@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Wallet, Briefcase, TrendingUp, DollarSign, Award, Users, Banana } from 'lucide-react'
-import { Connection, PublicKey } from '@solana/web3.js'
+import { useState } from 'react'
+import { Wallet, Briefcase, TrendingUp, DollarSign, Award, Users } from 'lucide-react'
 import './index.css'
 
 // API base URL
@@ -23,7 +22,6 @@ function App() {
   const [bounties, setBounties] = useState([])
   const [shills, setShills] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
-  const [loading, setLoading] = useState(false)
 
   // Connect wallet
   const connectWallet = async () => {
@@ -59,7 +57,6 @@ function App() {
 
   // Load data for the user
   const loadData = async (userId) => {
-    setLoading(true)
     try {
       // Load jobs
       const jobsRes = await fetch(`${API_URL}/api/jobs`)
@@ -82,8 +79,6 @@ function App() {
       setLeaderboard(leaderboardData.leaderboard)
     } catch (error) {
       console.error('Data loading error:', error)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -330,9 +325,9 @@ function App() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'dashboard' && <Dashboard user={user} shills={shills} onRequestPayout={requestPayout} />}
-        {activeTab === 'jobs' && <JobsSection jobs={jobs} user={user} onApply={applyForJob} />}
-        {activeTab === 'shills' && <ShillsSection shills={shills} user={user} onSubmitShill={submitShill} />}
-        {activeTab === 'bounties' && <BountiesSection bounties={bounties} user={user} />}
+        {activeTab === 'jobs' && <JobsSection jobs={jobs} onApply={applyForJob} />}
+        {activeTab === 'shills' && <ShillsSection shills={shills} onSubmitShill={submitShill} />}
+        {activeTab === 'bounties' && <BountiesSection bounties={bounties} />}
         {activeTab === 'leaderboard' && <LeaderboardSection leaderboard={leaderboard} />}
       </main>
     </div>
@@ -412,7 +407,7 @@ function Dashboard({ user, shills, onRequestPayout }) {
 }
 
 // Jobs Section Component
-function JobsSection({ jobs, user, onApply }) {
+function JobsSection({ jobs, onApply }) {
   return (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold text-ape-brown-800">Available Jobs</h2>
@@ -446,7 +441,7 @@ function JobsSection({ jobs, user, onApply }) {
 }
 
 // Shills Section Component
-function ShillsSection({ shills, user, onSubmitShill }) {
+function ShillsSection({ shills, onSubmitShill }) {
   const [tweetUrl, setTweetUrl] = useState('')
   const [ticker, setTicker] = useState('')
 
@@ -536,7 +531,7 @@ function ShillsSection({ shills, user, onSubmitShill }) {
 }
 
 // Bounties Section Component
-function BountiesSection({ bounties, user }) {
+function BountiesSection({ bounties }) {
   return (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold text-ape-brown-800">Active Bounties</h2>
