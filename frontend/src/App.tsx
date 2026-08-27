@@ -141,7 +141,7 @@ function App() {
   }
 
   // Submit shill
-  const submitShill = async (tweetUrl, ticker) => {
+  const submitShill = async (tweetUrl) => {
     if (!token) return
 
     try {
@@ -158,8 +158,7 @@ function App() {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          tweetId,
-          tickerMention: ticker
+          tweetId
         })
       })
 
@@ -168,7 +167,7 @@ function App() {
         alert(`Shill submitted! You earned ${data.earnings.toFixed(8)} SOL`)
         loadData(user.id)
       } else {
-        alert('Failed to submit shill')
+        alert(data.error || 'Failed to submit shill')
       }
     } catch (error) {
       console.error('Shill submission error:', error)
@@ -491,17 +490,15 @@ function JobsSection({ jobs, onApply }) {
 // Shills Section Component
 function ShillsSection({ shills, onSubmitShill }) {
   const [tweetUrl, setTweetUrl] = useState('')
-  const [ticker, setTicker] = useState('')
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!tweetUrl || !ticker) {
-      alert('Please provide both tweet URL and ticker')
+    if (!tweetUrl) {
+      alert('Please provide tweet URL')
       return
     }
-    onSubmitShill(tweetUrl, ticker)
+    onSubmitShill(tweetUrl)
     setTweetUrl('')
-    setTicker('')
   }
 
   return (
@@ -510,7 +507,10 @@ function ShillsSection({ shills, onSubmitShill }) {
 
       {/* Submit Form */}
       <div className="ape-card">
-        <h3 className="text-xl font-bold mb-4 text-ape-brown-800">New Shill</h3>
+        <h3 className="text-xl font-bold mb-4 text-ape-brown-800">Submit a Tweet</h3>
+        <p className="text-sm text-ape-brown-600 mb-4">
+          Your tweet must mention <strong>$APEPLOY</strong> and be from your linked X account.
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-ape-brown-700 mb-2">
@@ -524,21 +524,9 @@ function ShillsSection({ shills, onSubmitShill }) {
               className="ape-input"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-ape-brown-700 mb-2">
-              Ticker Symbol
-            </label>
-            <input
-              type="text"
-              value={ticker}
-              onChange={(e) => setTicker(e.target.value)}
-              placeholder="$APEPLOY"
-              className="ape-input"
-            />
-          </div>
           <button type="submit" className="ape-button ape-button-primary">
             <DollarSign className="inline mr-2" size={18} />
-            Submit Shill
+            Submit for Earnings
           </button>
         </form>
       </div>

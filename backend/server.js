@@ -373,26 +373,57 @@ app.get('/api/users/:userId/applications', authenticateToken, async (req, res) =
 // Submit shill (requires auth)
 app.post('/api/shill/submit', authenticateToken, async (req, res) => {
   try {
-    const { tweetId, tickerMention } = req.body;
+    const { tweetId } = req.body;
     const userId = req.user.userId;
 
     if (!tweetId) {
       return res.status(400).json({ error: 'Tweet ID required' });
     }
 
-    // TODO: Verify X account is linked
-    // const user = await prisma.user.findUnique({ where: { id: userId } });
-    // if (!user.twitterVerified) {
-    //   return res.status(400).json({ error: 'X account must be linked first' });
-    // }
+    // Get user to verify X account is linked
+    const user = await prisma.user.findUnique({
+      where: { id: userId }
+    });
 
-    // TODO: Fetch tweet metrics from X API
+    if (!user.twitterVerified) {
+      return res.status(400).json({ error: 'X account must be linked first' });
+    }
+
+    // Check for duplicate tweetId
+    const existingShill = await prisma.shillRecord.findUnique({
+      where: { tweetId }
+    });
+
+    if (existingShill) {
+      return res.status(400).json({ error: 'This tweet has already been submitted' });
+    }
+
+    // Check daily shill cap
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dailyShillCap = parseInt(process.env.DAILY_SHILL_CAP || '50');
+
+    const todayShills = await prisma.shillRecord.count({
+      where: {
+        userId,
+        createdAt: { gte: today }
+      }
+    });
+
+    if (todayShills >= dailyShillCap) {
+      return res.status(400).json({ error: `Daily shill limit (${dailyShillCap}) reached` });
+    }
+
+    // Fetch tweet from Twitter API
+    let tweetData = null;
     let metrics = { likes: 0, retweets: 0, replies: 0, views: 0 };
+    let tweetText = '';
+    let tweetCreatedAt = null;
 
     if (process.env.TWITTER_BEARER_TOKEN) {
       try {
         const response = await axios.get(
-          `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics,created_at`,
+          `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics,created_at,author_id,text`,
           {
             headers: {
               'Authorization': `Bearer ${process.env.TWITTER_BEARER_TOKEN}`
@@ -400,7 +431,27 @@ app.post('/api/shill/submit', authenticateToken, async (req, res) => {
           }
         );
 
-        const publicMetrics = response.data.data.public_metrics;
+        tweetData = response.data.data;
+        tweetText = tweetData.text;
+        tweetCreatedAt = new Date(tweetData.created_at);
+
+        // Verify tweet belongs to the user
+        if (tweetData.author_id !== user.twitterId) {
+          return res.status(403).json({ error: 'Tweet must be from your linked X account' });
+        }
+
+        // Verify tweet contains the required ticker
+        const requiredTicker = process.env.REQUIRED_TICKER || 'APEPLOY';
+        if (!tweetText.toUpperCase().includes(`$${requiredTicker}`)) {
+          return res.status(400).json({ error: `Tweet must mention $${requiredTicker}` });
+        }
+
+        // Verify tweet was created after X account was linked
+        if (user.createdAt && tweetCreatedAt < user.createdAt) {
+          return res.status(400).json({ error: 'Tweet was created before linking X account' });
+        }
+
+        const publicMetrics = tweetData.public_metrics || {};
         metrics = {
           likes: publicMetrics.like_count || 0,
           retweets: publicMetrics.retweet_count || 0,
@@ -408,20 +459,27 @@ app.post('/api/shill/submit', authenticateToken, async (req, res) => {
           views: publicMetrics.impression_count || 0
         };
       } catch (twitterError) {
-        console.warn('Failed to fetch tweet metrics:', twitterError.message);
+        console.error('Twitter API error:', twitterError.response?.data || twitterError.message);
+        if (twitterError.response?.status === 404) {
+          return res.status(404).json({ error: 'Tweet not found' });
+        }
+        return res.status(500).json({ error: 'Failed to fetch tweet from Twitter' });
       }
+    } else {
+      return res.status(500).json({ error: 'Twitter Bearer token not configured' });
     }
 
-    // Calculate earnings based on engagement
-    const earnings = calculateShillEarnings(metrics);
+    // Calculate earnings based on engagement and NFT boost
+    const baseEarnings = calculateShillEarnings(metrics);
+    const earnings = baseEarnings * (user.nftBoostMultiplier || 1.0);
 
-    // Create shill record
+    // Create shill record (tickerMention derived from tweet, not from client)
     const shillRecord = await prisma.shillRecord.create({
       data: {
         userId,
         tweetId,
-        tweetContent: '',
-        tickerMention,
+        tweetContent: tweetText,
+        tickerMention: process.env.REQUIRED_TICKER || 'APEPLOY',
         ...metrics,
         earnings
       }
@@ -440,9 +498,18 @@ app.post('/api/shill/submit', authenticateToken, async (req, res) => {
     // Check for rank upgrade
     await checkAndUpgradeApeRank(userId);
 
+    // Schedule metrics re-polling
+    scheduleMetricsRepoll(shillRecord.id, tweetId, userId);
+
     res.json({ success: true, shillRecord, metrics, earnings });
   } catch (error) {
     console.error('Shill submission error:', error);
+
+    // Handle Prisma unique constraint violation
+    if (error.code === 'P2002') {
+      return res.status(400).json({ error: 'This tweet has already been submitted' });
+    }
+
     res.status(500).json({ error: 'Failed to submit shill' });
   }
 });
@@ -778,6 +845,80 @@ async function checkAndUpgradeApeRank(userId) {
     });
     console.log(`User ${userId} upgraded to ${newRank}`);
   }
+}
+
+// Schedule metrics re-polling for a shill
+function scheduleMetricsRepoll(shillId, tweetId, userId) {
+  const repollIntervals = [1, 6, 24, 48]; // hours
+
+  repollIntervals.forEach((hours) => {
+    const delay = hours * 60 * 60 * 1000; // Convert to milliseconds
+
+    setTimeout(async () => {
+      try {
+        // Check if shill still exists
+        const shill = await prisma.shillRecord.findUnique({
+          where: { id: shillId }
+        });
+
+        if (!shill) return;
+
+        // Fetch updated metrics from Twitter
+        if (process.env.TWITTER_BEARER_TOKEN) {
+          const response = await axios.get(
+            `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics`,
+            {
+              headers: {
+                'Authorization': `Bearer ${process.env.TWITTER_BEARER_TOKEN}`
+              }
+            }
+          );
+
+          const publicMetrics = response.data.data.public_metrics || {};
+          const newMetrics = {
+            likes: publicMetrics.like_count || 0,
+            retweets: publicMetrics.retweet_count || 0,
+            replies: publicMetrics.reply_count || 0,
+            views: publicMetrics.impression_count || 0
+          };
+
+          // Calculate earnings delta
+          const oldEarnings = calculateShillEarnings({
+            likes: shill.likes,
+            retweets: shill.retweets,
+            replies: shill.replies,
+            views: shill.views
+          });
+
+          const newEarnings = calculateShillEarnings(newMetrics);
+          const earningsDelta = newEarnings - oldEarnings;
+
+          if (earningsDelta > 0) {
+            // Update shill record
+            await prisma.shillRecord.update({
+              where: { id: shillId },
+              data: {
+                ...newMetrics,
+                earnings: newEarnings
+              }
+            });
+
+            // Update user total earnings
+            await prisma.user.update({
+              where: { id: userId },
+              data: {
+                totalEarnings: { increment: earningsDelta }
+              }
+            });
+
+            console.log(`Repoll (${hours}h): Added ${earningsDelta} SOL to user ${userId} for shill ${shillId}`);
+          }
+        }
+      } catch (error) {
+        console.error(`Metrics repoll error for shill ${shillId}:`, error.message);
+      }
+    }, delay);
+  });
 }
 
 // ============================================
