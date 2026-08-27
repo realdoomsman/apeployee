@@ -12,12 +12,15 @@ const {
 } = require('@solana/web3.js');
 const dotenv = require('dotenv');
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
+const nacl = require('tweetnacl');
 
 dotenv.config();
 
 const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'default-secret-change-in-production';
 
 // Middleware
 app.use(cors({
@@ -39,45 +42,120 @@ if (process.env.SOLANA_PRIVATE_KEY) {
   vaultWallet = null;
 }
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+// ============================================
+// AUTH MIDDLEWARE
+// ============================================
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+}
 
 // ============================================
 // AUTH ENDPOINTS
 // ============================================
 
-// Register/Connect wallet
-app.post('/api/auth/wallet', async (req, res) => {
+// Get nonce for signing
+app.get('/api/auth/nonce', async (req, res) => {
   try {
-    const { walletAddress } = req.body;
+    const { wallet } = req.query;
 
-    if (!walletAddress) {
+    if (!wallet) {
       return res.status(400).json({ error: 'Wallet address required' });
     }
 
-    // Check if user exists
-    let user = await prisma.user.findUnique({
-      where: { walletAddress }
+    // Generate random nonce
+    const nonce = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 15);
+
+    // Store nonce with expiration (5 minutes)
+    await prisma.user.upsert({
+      where: { walletAddress: wallet },
+      update: { email: nonce },
+      create: {
+        walletAddress: wallet,
+        email: nonce,
+        apeRank: 'CHIMPANZEE',
+        reputationScore: 0
+      }
     });
 
-    // Create user if doesn't exist
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          walletAddress,
-          apeRank: 'CHIMPANZEE',
-          reputationScore: 0
-        }
-      });
+    res.json({ nonce });
+  } catch (error) {
+    console.error('Nonce generation error:', error);
+    res.status(500).json({ error: 'Failed to generate nonce' });
+  }
+});
+
+// Verify signature and issue JWT
+app.post('/api/auth/wallet', async (req, res) => {
+  try {
+    const { wallet, signature } = req.body;
+
+    if (!wallet || !signature) {
+      return res.status(400).json({ error: 'Wallet and signature required' });
     }
 
-    res.json({ success: true, user });
+    // Get user to retrieve nonce
+    const user = await prisma.user.findUnique({
+      where: { walletAddress: wallet }
+    });
+
+    if (!user || !user.email) {
+      return res.status(400).json({ error: 'No nonce found. Request a nonce first.' });
+    }
+
+    const nonce = user.email;
+
+    // Verify signature
+    const message = new TextEncoder().encode(nonce);
+    const signatureBytes = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
+    const publicKeyBytes = new PublicKey(wallet).toBytes();
+
+    const isValid = nacl.sign.detached.verify(
+      message,
+      signatureBytes,
+      publicKeyBytes
+    );
+
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    // Clear nonce after verification
+    await prisma.user.update({
+      where: { walletAddress: wallet },
+      data: { email: null }
+    });
+
+    // Issue JWT
+    const token = jwt.sign(
+      { userId: user.id, walletAddress: user.walletAddress },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ success: true, token, user });
   } catch (error) {
-    console.error('Wallet connection error:', error);
-    res.status(500).json({ error: 'Failed to connect wallet' });
+    console.error('Wallet auth error:', error);
+    res.status(500).json({ error: 'Failed to authenticate wallet' });
   }
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // ============================================
@@ -104,11 +182,12 @@ app.get('/api/jobs', async (req, res) => {
   }
 });
 
-// Apply for a job
-app.post('/api/jobs/:jobId/apply', async (req, res) => {
+// Apply for a job (requires auth)
+app.post('/api/jobs/:jobId/apply', authenticateToken, async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { userId, coverLetter } = req.body;
+    const { coverLetter } = req.body;
+    const userId = req.user.userId;
 
     // Check if already applied
     const existing = await prisma.jobApplication.findUnique({
@@ -143,10 +222,16 @@ app.post('/api/jobs/:jobId/apply', async (req, res) => {
   }
 });
 
-// Get user's applications
-app.get('/api/users/:userId/applications', async (req, res) => {
+// Get user's applications (requires auth)
+app.get('/api/users/:userId/applications', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // Verify user can only access their own applications
+    if (req.user.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const applications = await prisma.jobApplication.findMany({
       where: { userId },
       include: {
@@ -166,12 +251,23 @@ app.get('/api/users/:userId/applications', async (req, res) => {
 // SHILL TRACKING ENDPOINTS
 // ============================================
 
-// Submit shill (tweet) for tracking
-app.post('/api/shill/submit', async (req, res) => {
+// Submit shill (requires auth)
+app.post('/api/shill/submit', authenticateToken, async (req, res) => {
   try {
-    const { userId, tweetId, tweetContent, tickerMention } = req.body;
+    const { tweetId, tickerMention } = req.body;
+    const userId = req.user.userId;
 
-    // Fetch tweet metrics from X API
+    if (!tweetId) {
+      return res.status(400).json({ error: 'Tweet ID required' });
+    }
+
+    // TODO: Verify X account is linked
+    // const user = await prisma.user.findUnique({ where: { id: userId } });
+    // if (!user.twitterVerified) {
+    //   return res.status(400).json({ error: 'X account must be linked first' });
+    // }
+
+    // TODO: Fetch tweet metrics from X API
     let metrics = { likes: 0, retweets: 0, replies: 0, views: 0 };
 
     if (process.env.TWITTER_BEARER_TOKEN) {
@@ -205,7 +301,7 @@ app.post('/api/shill/submit', async (req, res) => {
       data: {
         userId,
         tweetId,
-        tweetContent,
+        tweetContent: '',
         tickerMention,
         ...metrics,
         earnings
@@ -232,11 +328,16 @@ app.post('/api/shill/submit', async (req, res) => {
   }
 });
 
-// Get user's shill records
-app.get('/api/users/:userId/shills', async (req, res) => {
+// Get user's shills (requires auth)
+app.get('/api/users/:userId/shills', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
     const { limit = 50, offset = 0 } = req.query;
+
+    // Verify user can only access their own shills
+    if (req.user.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     const shills = await prisma.shillRecord.findMany({
       where: { userId },
@@ -285,11 +386,12 @@ app.get('/api/bounties', async (req, res) => {
   }
 });
 
-// Submit bounty
-app.post('/api/bounties/:bountyId/submit', async (req, res) => {
+// Submit bounty (requires auth)
+app.post('/api/bounties/:bountyId/submit', authenticateToken, async (req, res) => {
   try {
     const { bountyId } = req.params;
-    const { userId, proofUrl } = req.body;
+    const { proofUrl } = req.body;
+    const userId = req.user.userId;
 
     const submission = await prisma.bountySubmission.create({
       data: {
@@ -314,10 +416,16 @@ app.post('/api/bounties/:bountyId/submit', async (req, res) => {
 // PAYMENT ENDPOINTS
 // ============================================
 
-// Get user's payment history
-app.get('/api/users/:userId/payments', async (req, res) => {
+// Get user's payment history (requires auth)
+app.get('/api/users/:userId/payments', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // Verify user can only access their own payments
+    if (req.user.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const payments = await prisma.payment.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -331,10 +439,11 @@ app.get('/api/users/:userId/payments', async (req, res) => {
   }
 });
 
-// Request payout
-app.post('/api/payments/request', async (req, res) => {
+// Request payout (requires auth)
+app.post('/api/payments/request', authenticateToken, async (req, res) => {
   try {
-    const { userId, amount } = req.body;
+    const { amount } = req.body;
+    const userId = req.user.userId;
 
     const user = await prisma.user.findUnique({
       where: { id: userId }
@@ -362,11 +471,12 @@ app.post('/api/payments/request', async (req, res) => {
     // Process payment on-chain (if vault wallet available)
     if (vaultWallet) {
       try {
+        const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
         const transaction = new Transaction().add(
           SystemProgram.transfer({
             fromPubkey: vaultWallet.publicKey,
             toPubkey: new PublicKey(user.walletAddress),
-            lamports: amount * LAMPORTS_PER_SOL
+            lamports
           })
         );
 
@@ -412,7 +522,7 @@ app.post('/api/payments/request', async (req, res) => {
       await prisma.payment.update({
         where: { id: payment.id },
         data: {
-          status: 'COMPLETED',
+          status: 'SIMULATED',
           transactionHash: 'simulated-' + Date.now(),
           processedAt: new Date()
         }
@@ -470,10 +580,11 @@ app.get('/api/leaderboard', async (req, res) => {
 // REFERRAL ENDPOINTS
 // ============================================
 
-// Create referral
-app.post('/api/referrals', async (req, res) => {
+// Create referral (requires auth)
+app.post('/api/referrals', authenticateToken, async (req, res) => {
   try {
-    const { referrerId, refereeId } = req.body;
+    const { refereeId } = req.body;
+    const referrerId = req.user.userId;
 
     // Check if referee already has a referrer
     const existing = await prisma.referral.findUnique({
@@ -488,7 +599,7 @@ app.post('/api/referrals', async (req, res) => {
       data: {
         referrerId,
         refereeId,
-        bonusAmount: 0, // Will be set when referee earns
+        bonusAmount: 0,
         bonusPaid: false
       },
       include: {
@@ -510,19 +621,14 @@ app.post('/api/referrals', async (req, res) => {
 
 // Calculate shill earnings based on engagement
 function calculateShillEarnings(metrics) {
-  // Base rate: 0.00001 SOL per like
-  // Bonus: 0.00002 SOL per retweet
-  // Small bonus for views
   const likeEarnings = metrics.likes * 0.00001;
   const retweetEarnings = metrics.retweets * 0.00002;
-  const viewEarnings = metrics.views * 0.0000001; // Very small, but adds up
-
+  const viewEarnings = metrics.views * 0.0000001;
   return likeEarnings + retweetEarnings + viewEarnings;
 }
 
 // Calculate reputation boost from a shill
 function calculateReputationBoost(metrics) {
-  // Simple formula: likes + (retweets * 2) + (replies * 1.5)
   return metrics.likes + (metrics.retweets * 2) + (metrics.replies * 1.5);
 }
 

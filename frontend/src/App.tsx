@@ -15,7 +15,7 @@ const APE_RANKS = {
 }
 
 function App() {
-  const [wallet, setWallet] = useState(null)
+  const [token, setToken] = useState(null)
   const [user, setUser] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
   const [jobs, setJobs] = useState([])
@@ -23,10 +23,9 @@ function App() {
   const [shills, setShills] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
 
-  // Connect wallet
+  // Connect wallet and authenticate
   const connectWallet = async () => {
     try {
-      // Check if Phantom wallet is available
       if (!window.solana?.isPhantom) {
         alert('Please install Phantom wallet to continue')
         window.open('https://phantom.app/', '_blank')
@@ -37,18 +36,31 @@ function App() {
       const response = await solana.connect()
       const publicKey = response.publicKey.toString()
 
-      setWallet(publicKey)
+      // Get nonce
+      const nonceRes = await fetch(`${API_URL}/api/auth/nonce?wallet=${publicKey}`)
+      const { nonce } = await nonceRes.json()
 
-      // Register wallet with backend
-      const res = await fetch(`${API_URL}/api/auth/wallet`, {
+      // Sign nonce
+      const message = new TextEncoder().encode(`Sign this message to authenticate with Apeployee:\n\n${nonce}`)
+      const encodedMessage = new TextEncoder().encode(`Sign this message to authenticate with Apeployee:\n\n${nonce}`)
+      const signature = await solana.signMessage(encodedMessage, 'utf8')
+
+      // Verify and get token
+      const authRes = await fetch(`${API_URL}/api/auth/wallet`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletAddress: publicKey })
+        body: JSON.stringify({
+          wallet: publicKey,
+          signature: signature.signature
+        })
       })
 
-      const data = await res.json()
-      setUser(data.user)
-      loadData(data.user.id)
+      const authData = await authRes.json()
+      if (authData.success) {
+        setToken(authData.token)
+        setUser(authData.user)
+        loadData(authData.user.id)
+      }
     } catch (error) {
       console.error('Wallet connection error:', error)
       alert('Failed to connect wallet')
@@ -58,23 +70,25 @@ function App() {
   // Load data for the user
   const loadData = async (userId) => {
     try {
+      const headers = { Authorization: `Bearer ${token}` }
+
       // Load jobs
-      const jobsRes = await fetch(`${API_URL}/api/jobs`)
+      const jobsRes = await fetch(`${API_URL}/api/jobs`, { headers })
       const jobsData = await jobsRes.json()
       setJobs(jobsData.jobs)
 
       // Load bounties
-      const bountiesRes = await fetch(`${API_URL}/api/bounties`)
+      const bountiesRes = await fetch(`${API_URL}/api/bounties`, { headers })
       const bountiesData = await bountiesRes.json()
       setBounties(bountiesData.bounties)
 
       // Load user's shills
-      const shillsRes = await fetch(`${API_URL}/api/users/${userId}/shills`)
+      const shillsRes = await fetch(`${API_URL}/api/users/${userId}/shills`, { headers })
       const shillsData = await shillsRes.json()
       setShills(shillsData.shills)
 
       // Load leaderboard
-      const leaderboardRes = await fetch(`${API_URL}/api/leaderboard?limit=10`)
+      const leaderboardRes = await fetch(`${API_URL}/api/leaderboard?limit=10`, { headers })
       const leaderboardData = await leaderboardRes.json()
       setLeaderboard(leaderboardData.leaderboard)
     } catch (error) {
@@ -84,16 +98,16 @@ function App() {
 
   // Apply for a job
   const applyForJob = async (jobId, coverLetter = '') => {
-    if (!user) return
+    if (!token) return
 
     try {
       const res = await fetch(`${API_URL}/api/jobs/${jobId}/apply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          coverLetter
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ coverLetter })
       })
 
       const data = await res.json()
@@ -111,7 +125,7 @@ function App() {
 
   // Submit shill
   const submitShill = async (tweetUrl, ticker) => {
-    if (!user) return
+    if (!token) return
 
     try {
       const tweetId = tweetUrl.match(/status\/(\d+)/)?.[1]
@@ -122,11 +136,12 @@ function App() {
 
       const res = await fetch(`${API_URL}/api/shill/submit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
-          userId: user.id,
           tweetId,
-          tweetContent: 'Shilling for the bags!',
           tickerMention: ticker
         })
       })
@@ -146,16 +161,16 @@ function App() {
 
   // Request payout
   const requestPayout = async (amount) => {
-    if (!user) return
+    if (!token) return
 
     try {
       const res = await fetch(`${API_URL}/api/payments/request`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          amount
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ amount })
       })
 
       const data = await res.json()
@@ -179,7 +194,7 @@ function App() {
 
   const currentRank = getCurrentRank()
 
-  if (!wallet) {
+  if (!token) {
     return (
       <div className="min-h-screen jungle-pattern flex items-center justify-center p-4">
         <div className="max-w-4xl w-full">
@@ -253,7 +268,7 @@ function App() {
               </div>
             )}
             <div className="text-sm bg-ape-brown-700 px-4 py-2 rounded-lg">
-              {wallet.slice(0, 4)}...{wallet.slice(-4)}
+              {user?.walletAddress.slice(0, 4)}...{user?.walletAddress.slice(-4)}
             </div>
           </div>
         </div>

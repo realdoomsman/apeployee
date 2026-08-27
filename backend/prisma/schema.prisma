@@ -27,6 +27,7 @@ model User {
   totalEarnings     Float     @default(0)
   totalShillCount   Int       @default(0)
   reputationScore   Float     @default(0)
+  nftBoostMultiplier Float    @default(1.0) // Claude's lane - read only
 
   // Relations
   jobs              JobApplication[]
