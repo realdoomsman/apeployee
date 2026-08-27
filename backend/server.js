@@ -722,7 +722,11 @@ cron.schedule('*/3 * * * *', guarded(async () => {
 cron.schedule('*/10 * * * *', guarded(async () => {
   if (process.env.AUTOPAY !== 'true' || !solana.isLive()) return;
   const workers = await prisma.user.findMany({ where: { balance: { gt: 0 }, payoutAddress: { not: null }, xVerified: true } });
-  if (!workers.length) return;
+  if (!workers.length) {
+    const earners = await prisma.user.count({ where: { balance: { gt: 0 } } });
+    if (earners) console.log(`[payday] skipped — ${earners} worker(s) have wages but no payout address filed`);
+    return;
+  }
 
   let vaultBal;
   try { vaultBal = await solana.getVaultBalance(); } catch { return; }
