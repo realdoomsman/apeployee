@@ -55,3 +55,7 @@ prisma/migrations/
 *.tmp
 *.temp
 .cache/
+
+# SQLite
+*.db
+*.db-journal
