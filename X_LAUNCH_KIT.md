@@ -28,7 +28,7 @@ everywhere — X, pump.fun, site. It IS the brand.
 
 **Location:** The Office
 **Website:** https://apeployee.fun
-**Pinned:** the how-it-works thread (Post 3). Swap the pin to the launch post on launch day.
+**Pinned:** the main post (Post 3). Swap the pin to the launch post on launch day.
 
 ---
 
@@ -57,36 +57,43 @@ Every post is ≤270 chars and fact-checked against what the site actually does.
 >
 > the 9-5 is dead. clock in.
 
-### Post 3 — How-it-works THREAD (attach `teaser-howitworks.png` to tweet 1 — PIN THIS)
+### Post 3 — THE MAIN POST (one long post, no thread — PIN THIS)
 
-⚠ Tweets 3 and 5 are exactly at the limit — paste verbatim, add nothing.
+Needs X Premium (long post, ~1,300 chars). Attach `teaser-hiring.png` or
+`teaser-howitworks.png`.
 
-**1/**
-> how to get hired by a memecoin — a thread for the chronically online and criminally unpaid.
+> every other coin asks for diamond hands.
+> $APEPLOYEE asks for your resume.
 >
-> $APEPLOYEE pays you real SOL to post about it. everything below is live right now at apeployee.fun. no wallet connect at any step.
-
-**2/**
-> 1) sign in with X. no wallet, no signatures, nothing to install.
+> 📋 NOW HIRING: yappers. remote. all timezones.
 >
-> you post a one-time code (like APE-4F2K9Q) once to prove the account is yours. ~30 seconds. that's the entire onboarding. fastest HR department in history.
-
-**3/**
-> 2) take a job. shill $APEPLOYEE in your own words. the system auto-verifies your post on X, then payroll sends SOL to any Solana address you paste.
+> the market is waking up. new people are walking in every day and they all need SOL to start. so we hired them.
 >
-> pay = base per post + engagement bonus (likes, replies) × rank × Worker Pass boost. promotions exist. this is a real job.
-
-**4/** (optionally attach `teaser-tiers.png`)
-> 3) get promoted. every 5 approved posts auto-mines you a Worker Pass — a real cNFT on Solana mainnet, completely free.
+> THE ROLE
+> post about $APEPLOYEE on X, in your own words. the system verifies your post automatically. that's the whole job.
 >
-> 5 tiers: Common +5% pay up to Legendary +50%. equip it at your desk to activate the boost. tradable on Magic Eden if you're a sellout.
-
-**5/** (optionally attach `teaser-payroll.png`)
-> 4) the money: every $APEPLOYEE trade generates pump.fun creator fees. the vault auto-claims them, payroll pays the workers. volume = payroll.
+> COMPENSATION
+> → base pay per verified post, in real SOL
+> → plus engagement bonus (likes/replies) × your rank × your Worker Pass boost
+> → funded by pump.fun creator fees: every trade → vault auto-claims → payroll pays workers. volume IS payroll.
 >
-> the market is waking up. new people need SOL to start. we pay you to bring them in. everybody eats.
+> BENEFITS
+> Worker Pass — 1000 real cNFTs on Solana mainnet, tradable on Magic Eden & Tensor. mined FREE: 1 pass per 5 approved posts. five tiers, Common +5% up to Legendary +50%. wear one at your desk or the boost doesn't count.
 >
-> get hired at apeployee.fun
+> REQUIREMENTS
+> → one X account. that's your login and your resume.
+> → NO wallet connect, ever. nothing to sign, nothing to install.
+> → post a one-time code (like APE-4F2K9Q) once. ~30 seconds.
+> → paste any Solana address for payday.
+>
+> every shill, every payout, every pass is public on the site. receipts on the record.
+>
+> not points. not a whitelist grind. real X verification, real on-chain mints, real SOL — live right now.
+>
+> HOW TO APPLY
+> clock in → apeployee.fun
+>
+> everybody eats.
 
 ### Post 4 — Worker Pass (attach `teaser-tiers.png`)
 
@@ -141,7 +148,7 @@ Every post is ≤270 chars and fact-checked against what the site actually does.
 
 ## Launch-day checklist
 - [ ] pfp (token photo) + banner (`x-banner.png`) + bio + website set
-- [ ] Posts 1–6 already out over the prior days, thread pinned
+- [ ] Posts 1–6 already out over the prior days, main post pinned
 - [ ] https://apeployee.fun live (it is — verified with SSL)
 - [ ] Launch token on pump.fun with the vault wallet as creator
 - [ ] Post 7 with the CA the moment it's live, re-pin to it, reply with CA alone for easy copying
