@@ -1,8 +1,10 @@
 // OWNED-BY-CLAUDE — Apeployee NFT collection generator. GLM: do not edit.
 // Usage:
-//   node generate.js --sample   -> renders one preview per tier into ./out/
-//   node generate.js            -> renders all 300 into ../output/{images,metadata}
-//                                  plus ../output/contact-sheet.png
+//   node generate.js --sample   -> renders tier/trait previews into ./out/
+//   node generate.js            -> initial run: 300 tokens. If ../output/manifest.json
+//                                  already exists, EXTENDS the collection to 1000 by
+//                                  adding ids 301-1000 (Season 2 traits), leaving
+//                                  001-300 byte-identical.
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
@@ -17,33 +19,52 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const rand = mulberry32(0xA9E10);
+let rand = mulberry32(0xA9E10); // season 1 seed; season 2 reseeds below
 const pick = (arr) => arr[Math.floor(rand() * arr.length)];
 
 // Pools are cumulative: each tier unlocks flashier traits on top of the last.
+// Season 2 additions: Beanie (common); Trading Floor, 3D Glasses, Hi-Vis Vest
+// (uncommon); Moon Desk, Albino, Propeller Cap, Tracksuit (rare); Laser Eyes,
+// Diamond (epic); Golden Banana (legendary item option).
 const POOLS = {
   Common: {
     background: ['XP Bliss', 'Office Gray', 'Jungle Office'],
     fur: ['Classic Brown', 'Dark Cocoa', 'Ash Gray'],
     outfit: ['Bare', 'White Collar', 'Hoodie'],
     eyewear: ['None', 'Round Glasses', 'Nerd Glasses'],
-    headwear: ['None', 'Backwards Cap', 'Visor'],
+    headwear: ['None', 'Backwards Cap', 'Visor', 'Beanie'],
     item: ['None', 'Banana', 'Coffee', 'Keyboard'],
   },
-  Uncommon: { background: ['Sunset Grind'], outfit: ['Hawaiian'], eyewear: ['Sunglasses'], headwear: ['Headset'], item: ['Banana Phone'] },
-  Rare: { background: ['Server Room'], outfit: ['Business Suit'], eyewear: ['Monocle'], headwear: ['Hard Hat', 'Party Hat'], item: ['Money Stack'] },
+  Uncommon: {
+    background: ['Sunset Grind', 'Trading Floor'],
+    outfit: ['Hawaiian', 'Hi-Vis Vest'],
+    eyewear: ['Sunglasses', '3D Glasses'],
+    headwear: ['Headset'],
+    item: ['Banana Phone'],
+  },
+  Rare: {
+    background: ['Server Room', 'Moon Desk'],
+    fur: ['Albino'],
+    outfit: ['Business Suit', 'Tracksuit'],
+    eyewear: ['Monocle'],
+    headwear: ['Hard Hat', 'Party Hat', 'Propeller Cap'],
+    item: ['Money Stack'],
+  },
+  Epic: {
+    eyewear: ['Laser Eyes'],
+    item: ['Diamond'],
+  },
 };
 
-const TIERS = [
-  { name: 'Common',    count: 150, boost: '1.05x' },
-  { name: 'Uncommon',  count: 90,  boost: '1.10x' },
-  { name: 'Rare',      count: 40,  boost: '1.20x' },
-  { name: 'Epic',      count: 15,  boost: '1.35x' },
-  { name: 'Legendary', count: 5,   boost: '1.50x' },
-];
+const LEGENDARY_EYEWEAR = ['None', 'Round Glasses', 'Nerd Glasses', 'Sunglasses', 'Monocle', 'Laser Eyes'];
+const LEGENDARY_ITEMS = ['Money Stack', 'Golden Banana', 'Diamond'];
+
+const BOOSTS = { Common: '1.05x', Uncommon: '1.10x', Rare: '1.20x', Epic: '1.35x', Legendary: '1.50x' };
+const SEASON1 = { Common: 150, Uncommon: 90, Rare: 40, Epic: 15, Legendary: 5 };     // ids 001-300
+const SEASON2 = { Common: 350, Uncommon: 210, Rare: 100, Epic: 30, Legendary: 10 };  // ids 301-1000
 
 function poolFor(tier, key) {
-  const chain = ['Common', 'Uncommon', 'Rare'];
+  const chain = ['Common', 'Uncommon', 'Rare', 'Epic'];
   const upTo = tier === 'Epic' || tier === 'Legendary' ? chain.length : chain.indexOf(tier) + 1;
   let out = [];
   for (let i = 0; i < upTo; i++) out = out.concat(POOLS[chain[i]][key] || []);
@@ -80,25 +101,25 @@ function rollTraits(tier) {
     t.background = 'Golden Vault';
     t.outfit = 'Gold Suit';
     t.headwear = 'Crown';
-    t.item = 'Money Stack';
-    t.eyewear = pick(['None', 'Round Glasses', 'Nerd Glasses', 'Sunglasses', 'Monocle']);
+    t.eyewear = pick(LEGENDARY_EYEWEAR);
+    t.item = pick(LEGENDARY_ITEMS);
   }
   return t;
 }
 
-function buildPlan() {
-  const seen = new Set();
+const comboKey = (t) => [t.background, t.fur, t.outfit, t.eyewear, t.headwear, t.item].join('|');
+
+function buildPlan(tierCounts, seen) {
   const plan = [];
-  for (const tier of TIERS) {
-    for (let i = 0; i < tier.count; i++) {
+  for (const [tier, count] of Object.entries(tierCounts)) {
+    for (let i = 0; i < count; i++) {
       let t; let guard = 0;
       do {
-        t = rollTraits(tier.name);
-        var key = [t.background, t.fur, t.outfit, t.eyewear, t.headwear, t.item].join('|');
-      } while (seen.has(key) && ++guard < 5000);
-      if (seen.has(key)) throw new Error(`Could not find unique combo for ${tier.name}`);
-      seen.add(key);
-      plan.push({ tier: tier.name, boost: tier.boost, traits: t });
+        t = rollTraits(tier);
+      } while (seen.has(comboKey(t)) && ++guard < 20000);
+      if (seen.has(comboKey(t))) throw new Error(`Could not find unique combo for ${tier}`);
+      seen.add(comboKey(t));
+      plan.push({ tier, boost: BOOSTS[tier], traits: t });
     }
   }
   // Shuffle so tiers are scattered across token ids (deterministic).
@@ -138,18 +159,30 @@ async function renderPNG(traits, file, size) {
   await sharp(Buffer.from(svg)).resize(size, size).png().toFile(file);
 }
 
+async function contactSheet(imgDir, total, file) {
+  const cols = total > 300 ? 40 : 20;
+  const rows = Math.ceil(total / cols);
+  const thumbs = [];
+  for (let i = 0; i < total; i++) {
+    const num = String(i + 1).padStart(3, '0');
+    const buf = await sharp(path.join(imgDir, `${num}.png`)).resize(100, 100).png().toBuffer();
+    thumbs.push({ input: buf, left: (i % cols) * 100, top: Math.floor(i / cols) * 100 });
+  }
+  await sharp({ create: { width: cols * 100, height: rows * 100, channels: 3, background: '#1B2230' } })
+    .composite(thumbs).png().toFile(file);
+}
+
 async function main() {
   const sampleMode = process.argv.includes('--sample');
   if (sampleMode) {
     const outDir = path.join(__dirname, 'out');
     fs.mkdirSync(outDir, { recursive: true });
     const samples = [
-      { name: 'common',    t: { background: 'XP Bliss', fur: 'Classic Brown', outfit: 'White Collar', eyewear: 'Round Glasses', headwear: 'None', item: 'Keyboard' } },
-      { name: 'uncommon',  t: { background: 'Sunset Grind', fur: 'Ash Gray', outfit: 'Hoodie', eyewear: 'Sunglasses', headwear: 'Headset', item: 'Banana Phone' } },
-      { name: 'rare',      t: { background: 'Server Room', fur: 'Dark Cocoa', outfit: 'Business Suit', eyewear: 'Nerd Glasses', headwear: 'Hard Hat', item: 'Money Stack' } },
-      { name: 'epic',      t: { background: 'Jungle Office', fur: 'Golden', outfit: 'Hawaiian', eyewear: 'Monocle', headwear: 'Party Hat', item: 'Banana' } },
-      { name: 'legendary', t: { background: 'Golden Vault', fur: 'Silverback', outfit: 'Gold Suit', eyewear: 'Sunglasses', headwear: 'Crown', item: 'Money Stack' } },
-      { name: 'plain',     t: { background: 'Office Gray', fur: 'Classic Brown', outfit: 'Bare', eyewear: 'None', headwear: 'Backwards Cap', item: 'Coffee' } },
+      { name: 's2-laser-epic',   t: { background: 'Trading Floor', fur: 'Golden', outfit: 'Business Suit', eyewear: 'Laser Eyes', headwear: 'None', item: 'Diamond' } },
+      { name: 's2-albino-rare',  t: { background: 'Moon Desk', fur: 'Albino', outfit: 'Tracksuit', eyewear: 'None', headwear: 'Propeller Cap', item: 'Money Stack' } },
+      { name: 's2-hivis',        t: { background: 'XP Bliss', fur: 'Dark Cocoa', outfit: 'Hi-Vis Vest', eyewear: '3D Glasses', headwear: 'Hard Hat', item: 'Coffee' } },
+      { name: 's2-beanie',       t: { background: 'Office Gray', fur: 'Classic Brown', outfit: 'Hoodie', eyewear: 'Round Glasses', headwear: 'Beanie', item: 'Banana' } },
+      { name: 's2-legendary',    t: { background: 'Golden Vault', fur: 'Silverback', outfit: 'Gold Suit', eyewear: 'Laser Eyes', headwear: 'Crown', item: 'Golden Banana' } },
     ];
     for (const s of samples) {
       await renderPNG(s.t, path.join(outDir, `${s.name}.png`), 1000);
@@ -158,33 +191,35 @@ async function main() {
     return;
   }
 
-  const imgDir = path.join(__dirname, '..', 'output', 'images');
-  const metaDir = path.join(__dirname, '..', 'output', 'metadata');
+  const outRoot = path.join(__dirname, '..', 'output');
+  const imgDir = path.join(outRoot, 'images');
+  const metaDir = path.join(outRoot, 'metadata');
   fs.mkdirSync(imgDir, { recursive: true });
   fs.mkdirSync(metaDir, { recursive: true });
 
-  const plan = buildPlan();
-  const manifest = [];
+  const manifestPath = path.join(outRoot, 'manifest.json');
+  const existing = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : [];
+  const seen = new Set(existing.map((e) => comboKey(e)));
+  const extending = existing.length > 0;
+  const startId = existing.length + 1;
+  if (extending) {
+    if (existing.length !== 300) throw new Error(`Expected 300 existing, found ${existing.length}`);
+    rand = mulberry32(0xA9E20); // season 2 seed
+  }
+
+  const plan = buildPlan(extending ? SEASON2 : SEASON1, seen);
+  const manifest = existing.slice();
   for (let i = 0; i < plan.length; i++) {
-    const id = i + 1;
+    const id = startId + i;
     const num = String(id).padStart(3, '0');
     await renderPNG(plan[i].traits, path.join(imgDir, `${num}.png`), 1000);
     fs.writeFileSync(path.join(metaDir, `${num}.json`), JSON.stringify(metadata(id, plan[i]), null, 2));
     manifest.push({ id, tier: plan[i].tier, boost: plan[i].boost, ...plan[i].traits });
-    if (id % 50 === 0) console.log(`rendered ${id}/300`);
+    if ((i + 1) % 100 === 0) console.log(`rendered ${i + 1}/${plan.length}`);
   }
-  fs.writeFileSync(path.join(__dirname, '..', 'output', 'manifest.json'), JSON.stringify(manifest, null, 2));
-
-  // Contact sheet: 20 x 15 grid of 100px thumbs.
-  const thumbs = [];
-  for (let i = 0; i < 300; i++) {
-    const num = String(i + 1).padStart(3, '0');
-    const buf = await sharp(path.join(imgDir, `${num}.png`)).resize(100, 100).png().toBuffer();
-    thumbs.push({ input: buf, left: (i % 20) * 100, top: Math.floor(i / 20) * 100 });
-  }
-  await sharp({ create: { width: 2000, height: 1500, channels: 3, background: '#1B2230' } })
-    .composite(thumbs).png().toFile(path.join(__dirname, '..', 'output', 'contact-sheet.png'));
-  console.log('done: 300 images + metadata + manifest + contact sheet');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  await contactSheet(imgDir, manifest.length, path.join(outRoot, 'contact-sheet.png'));
+  console.log(`done: ${plan.length} new tokens (ids ${startId}-${startId + plan.length - 1}), total ${manifest.length}; manifest + contact sheet updated`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

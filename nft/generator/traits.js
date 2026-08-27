@@ -9,6 +9,7 @@ const FURS = {
   'Ash Gray':      { base: '#8C8C94', dark: '#5A5A63', face: '#D9D0C7', crest: null },
   'Golden':        { base: '#C99733', dark: '#8F6716', face: '#F2DFAF', crest: null },
   'Silverback':    { base: '#4A4E57', dark: '#2C2F36', face: '#C9CDD4', crest: '#AEB4BE' },
+  'Albino':        { base: '#EFE9E1', dark: '#A6968A', face: '#F9E8E4', crest: null },
 };
 
 // ---------- backgrounds ----------
@@ -64,6 +65,30 @@ const BACKGROUNDS = {
         <circle cx="${x + 30}" cy="${y + 16}" r="6" fill="#4CE06B"/>
         <circle cx="${x + 52}" cy="${y + 16}" r="6" fill="#F2C94C"/>
         <circle cx="${x + 74}" cy="${y + 16}" r="6" fill="#2D9CDB"/>`).join('')}`).join('')}`,
+  'Trading Floor': () => `
+    <defs><linearGradient id="tfl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A2030"/><stop offset="1" stop-color="#26314A"/>
+    </linearGradient></defs>
+    <rect width="1000" height="1000" fill="url(#tfl)"/>
+    ${[200, 340, 480, 620, 760].map((y) => `<rect x="0" y="${y}" width="1000" height="3" fill="#3E4A66" opacity="0.5"/>`).join('')}
+    ${[[70, 560, 190, 'g'], [160, 480, 240, 'r'], [250, 430, 260, 'g'], [340, 470, 180, 'r'], [430, 350, 280, 'g'],
+       [610, 300, 250, 'g'], [700, 350, 160, 'r'], [790, 240, 260, 'g'], [880, 190, 240, 'g']].map(([x, y, h, c]) => `
+      <rect x="${x + 20}" y="${y - 60}" width="8" height="${h + 120}" fill="${c === 'g' ? '#4CE06B' : '#FF5A4E'}" opacity="0.7"/>
+      <rect x="${x}" y="${y}" width="48" height="${h}" rx="6" fill="${c === 'g' ? '#4CE06B' : '#FF5A4E'}" opacity="0.9"/>`).join('')}
+    <path d="M 40 700 L 250 600 L 420 660 L 640 440 L 800 470 L 960 220" stroke="#F2C94C" stroke-width="10" fill="none" stroke-linecap="round" opacity="0.9"/>`,
+  'Moon Desk': () => `
+    <defs><linearGradient id="mnd" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0E1526"/><stop offset="1" stop-color="#232E4A"/>
+    </linearGradient></defs>
+    <rect width="1000" height="1000" fill="url(#mnd)"/>
+    ${[[90, 120, 4], [220, 260, 3], [370, 90, 5], [520, 200, 3], [640, 120, 4], [140, 480, 3], [340, 380, 4],
+       [860, 420, 3], [940, 300, 4], [60, 640, 3], [930, 620, 3], [780, 520, 3], [500, 60, 3]].map(([x, y, r]) => `
+      <circle cx="${x}" cy="${y}" r="${r}" fill="#FFFFFF" opacity="0.8"/>`).join('')}
+    <circle cx="790" cy="190" r="115" fill="#E8E4D8"/>
+    <circle cx="750" cy="160" r="26" fill="#CFC9B8"/>
+    <circle cx="830" cy="230" r="18" fill="#CFC9B8"/>
+    <circle cx="800" cy="130" r="12" fill="#CFC9B8"/>
+    <circle cx="748" cy="228" r="12" fill="#CFC9B8"/>`,
   'Golden Vault': () => `
     <defs><radialGradient id="vlt" cx="0.5" cy="0.42" r="0.75">
       <stop offset="0" stop-color="#FFE9A8"/><stop offset="0.6" stop-color="#E8B64C"/><stop offset="1" stop-color="#9C6F1E"/>
@@ -153,6 +178,19 @@ const OUTFITS = {
     <path d="M 500 800 L 448 788 L 500 856 L 552 788 Z" fill="#F4F6F8"/>
     <path d="M 500 856 L 478 820 L 500 800 L 522 820 Z" fill="#8E44AD"/>
     <path d="M 500 856 L 482 928 L 500 985 L 518 928 Z" fill="#8E44AD"/>`,
+  'Hi-Vis Vest': () => `
+    <path d="M 140 1001 C 158 852 320 780 500 780 C 680 780 842 852 860 1001 Z" fill="#F4F6F8"/>
+    <path d="M 140 1001 C 155 850 260 792 385 782 L 425 1001 Z" fill="#F2891F"/>
+    <path d="M 860 1001 C 845 850 740 792 615 782 L 575 1001 Z" fill="#F2891F"/>
+    <path d="M 302 798 L 348 1001" stroke="#FFE08A" stroke-width="26"/>
+    <path d="M 698 798 L 652 1001" stroke="#FFE08A" stroke-width="26"/>
+    <path d="M 500 792 L 438 784 L 500 856 L 562 784 Z" fill="#DDE1E6"/>`,
+  'Tracksuit': () => `
+    <path d="M 135 1001 C 152 848 318 772 500 772 C 682 772 848 848 865 1001 Z" fill="#C0392B"/>
+    <path d="M 500 810 L 500 1001" stroke="#F4F6F8" stroke-width="10"/>
+    <path d="M 428 786 L 500 852 L 572 786" stroke="#F4F6F8" stroke-width="18" fill="none"/>
+    <path d="M 172 900 C 240 822 360 782 470 778" stroke="#F4F6F8" stroke-width="12" fill="none"/>
+    <path d="M 828 900 C 760 822 640 782 530 778" stroke="#F4F6F8" stroke-width="12" fill="none"/>`,
   'Gold Suit': () => `
     <path d="M 135 1001 C 152 848 318 772 500 772 C 682 772 848 848 865 1001 Z" fill="#C99733"/>
     <path d="M 500 795 L 410 780 L 470 900 L 500 830 Z" fill="#A87A1E"/>
@@ -189,6 +227,23 @@ const EYEWEAR = {
     <path d="M 488 424 Q 500 410 512 424" stroke="#16181D" stroke-width="14" fill="none"/>
     <path d="M 382 420 Q 410 404 442 414" stroke="#5B6472" stroke-width="9" fill="none" stroke-linecap="round"/>
     <path d="M 534 420 Q 562 404 594 414" stroke="#5B6472" stroke-width="9" fill="none" stroke-linecap="round"/>`,
+  '3D Glasses': () => `
+    <path d="M 262 410 L 360 428" stroke="#F4F6F8" stroke-width="11" stroke-linecap="round"/>
+    <path d="M 738 410 L 640 428" stroke="#F4F6F8" stroke-width="11" stroke-linecap="round"/>
+    <rect x="354" y="398" width="140" height="92" rx="12" fill="#FFFFFF"/>
+    <rect x="506" y="398" width="140" height="92" rx="12" fill="#FFFFFF"/>
+    <rect x="366" y="410" width="116" height="68" rx="6" fill="#E74C3C" opacity="0.8"/>
+    <rect x="518" y="410" width="116" height="68" rx="6" fill="#27C0E8" opacity="0.8"/>
+    <rect x="486" y="424" width="28" height="18" rx="6" fill="#FFFFFF"/>`,
+  'Laser Eyes': () => `
+    <polygon points="425,421 -10,318 -10,394 425,465" fill="#FF3B30" opacity="0.5"/>
+    <polygon points="575,421 1010,318 1010,394 575,465" fill="#FF3B30" opacity="0.5"/>
+    <ellipse cx="425" cy="443" rx="58" ry="50" fill="#FF3B30" opacity="0.35"/>
+    <ellipse cx="575" cy="443" rx="58" ry="50" fill="#FF3B30" opacity="0.35"/>
+    <ellipse cx="425" cy="443" rx="44" ry="38" fill="#FF3B30"/>
+    <ellipse cx="575" cy="443" rx="44" ry="38" fill="#FF3B30"/>
+    <ellipse cx="425" cy="443" rx="22" ry="18" fill="#FFD9D4"/>
+    <ellipse cx="575" cy="443" rx="22" ry="18" fill="#FFD9D4"/>`,
   'Monocle': () => `
     <circle cx="575" cy="443" r="66" fill="#FFFFFF" opacity="0.14"/>
     <circle cx="575" cy="443" r="66" fill="none" stroke="#C99733" stroke-width="11"/>
@@ -224,6 +279,19 @@ const HEADWEAR = {
     <path d="M 452 224 L 548 224 L 566 262 L 434 262 Z" fill="#F2C94C"/>
     <path d="M 470 186 L 530 186 L 543 214 L 457 214 Z" fill="#2D9CDB"/>
     <circle cx="500" cy="118" r="24" fill="#F2C94C"/>`,
+  'Beanie': () => `
+    <path d="M 322 300 A 185 162 0 0 1 678 300 Z" fill="#7A3E9D"/>
+    ${[400, 460, 520, 580, 640].map((x) => `<path d="M ${x} 300 Q ${x - 10} 220 ${x - 30} 172" stroke="#5E2E79" stroke-width="8" fill="none" opacity="0.7"/>`).join('')}
+    <rect x="308" y="272" width="384" height="46" rx="23" fill="#5E2E79"/>
+    <circle cx="500" cy="152" r="27" fill="#E9C9A3"/>`,
+  'Propeller Cap': () => `
+    <path d="M 322 300 A 185 162 0 0 1 678 300 Z" fill="#C0392B"/>
+    <path d="M 500 140 Q 400 160 356 232 L 500 300 Z" fill="#2D9CDB"/>
+    <path d="M 500 140 Q 600 160 644 232 L 500 300 Z" fill="#F2C94C"/>
+    <rect x="493" y="140" width="14" height="34" rx="7" fill="#5A5A63"/>
+    <ellipse cx="436" cy="138" rx="62" ry="15" fill="#57A63A" transform="rotate(-7 436 138)"/>
+    <ellipse cx="564" cy="138" rx="62" ry="15" fill="#F2703E" transform="rotate(7 564 138)"/>
+    <circle cx="500" cy="138" r="12" fill="#2C3546"/>`,
   'Crown': () => `
     <path d="M 368 292 L 352 190 L 428 244 L 500 160 L 572 244 L 648 190 L 632 292 Z" fill="#F2C94C" stroke="#C99733" stroke-width="8"/>
     <rect x="362" y="282" width="276" height="34" rx="10" fill="#C99733"/>
@@ -251,6 +319,18 @@ const ITEMS = {
     <path d="M 704 356 Q 640 386 622 470 Q 610 546 654 604 Q 668 610 676 596 Q 642 544 654 480 Q 668 414 718 386 Q 722 366 704 356 Z"
       fill="#F2C94C" stroke="#C9A227" stroke-width="7" transform="rotate(-8 670 480)"/>
     <path d="M 700 352 L 712 336 Q 724 336 724 350 L 716 362 Z" fill="#7A5A16"/>`,
+  'Diamond': () => `
+    <path d="M 726 884 L 762 844 L 818 844 L 854 884 L 790 972 Z" fill="#8EDCF2" stroke="#3FA8C9" stroke-width="7"/>
+    <path d="M 726 884 L 854 884" stroke="#3FA8C9" stroke-width="5"/>
+    <path d="M 762 844 L 776 884 L 790 972" stroke="#3FA8C9" stroke-width="4" fill="none"/>
+    <path d="M 818 844 L 804 884" stroke="#3FA8C9" stroke-width="4"/>
+    <path d="M 862 826 L 868 842 L 884 848 L 868 854 L 862 870 L 856 854 L 840 848 L 856 842 Z" fill="#FFFFFF"/>`,
+  'Golden Banana': () => `
+    <path d="M 700 962 Q 688 884 742 838 Q 800 790 872 800 Q 878 812 866 820 Q 812 812 766 852 Q 726 890 730 956 Q 716 966 700 962 Z"
+      fill="#FFD34D" stroke="#C9962A" stroke-width="7"/>
+    <path d="M 866 800 L 884 792 Q 894 800 886 812 L 870 818 Z" fill="#8F6716"/>
+    <path d="M 700 806 L 706 822 L 722 828 L 706 834 L 700 850 L 694 834 L 678 828 L 694 822 Z" fill="#FFF4CC"/>
+    <path d="M 880 900 L 886 916 L 902 922 L 886 928 L 880 944 L 874 928 L 858 922 L 874 916 Z" fill="#FFF4CC"/>`,
   'Money Stack': () => `
     <rect x="694" y="948" width="188" height="44" rx="9" fill="#3F7E2A"/>
     <rect x="700" y="908" width="188" height="44" rx="9" fill="#4E9A34"/>

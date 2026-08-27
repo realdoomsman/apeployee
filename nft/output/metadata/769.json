@@ -1,0 +1,49 @@
+{
+  "name": "Apeployee Worker Pass #769",
+  "symbol": "APEPLOYEE",
+  "description": "Official Apeployee Worker Pass. The market is rough. People need work. Hold this pass in your wallet to boost your shill pay — auto-mined for Bag Workers on the job. Tier: Epic (1.35x pay boost).",
+  "image": "769.png",
+  "attributes": [
+    {
+      "trait_type": "Tier",
+      "value": "Epic"
+    },
+    {
+      "trait_type": "Pay Boost",
+      "value": "1.35x"
+    },
+    {
+      "trait_type": "Background",
+      "value": "Trading Floor"
+    },
+    {
+      "trait_type": "Fur",
+      "value": "Golden"
+    },
+    {
+      "trait_type": "Outfit",
+      "value": "Tracksuit"
+    },
+    {
+      "trait_type": "Eyewear",
+      "value": "3D Glasses"
+    },
+    {
+      "trait_type": "Headwear",
+      "value": "Beanie"
+    },
+    {
+      "trait_type": "Item",
+      "value": "Banana"
+    }
+  ],
+  "properties": {
+    "files": [
+      {
+        "uri": "769.png",
+        "type": "image/png"
+      }
+    ],
+    "category": "image"
+  }
+}
