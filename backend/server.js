@@ -65,6 +65,32 @@ function authenticateToken(req, res, next) {
   });
 }
 
+// Admin middleware (P4.13)
+function requireAdmin(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, async (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+
+    // Check if wallet is in admin allowlist
+    const adminWallets = process.env.ADMIN_WALLETS?.split(',') || [];
+    if (!adminWallets.includes(user.walletAddress)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    req.user = user;
+    req.isAdmin = true;
+    next();
+  });
+}
+
 // ============================================
 // AUTH ENDPOINTS
 // ============================================
@@ -311,12 +337,7 @@ app.post('/api/jobs/:jobId/apply', authenticateToken, async (req, res) => {
 
     // Check if already applied
     const existing = await prisma.jobApplication.findUnique({
-      where: {
-        userId_jobId: {
-          userId,
-          jobId
-        }
-      }
+      where: { userId_jobId: { userId, jobId } }
     });
 
     if (existing) {
@@ -325,13 +346,19 @@ app.post('/api/jobs/:jobId/apply', authenticateToken, async (req, res) => {
 
     const application = await prisma.jobApplication.create({
       data: {
-        userId,
         jobId,
+        userId,
         coverLetter,
         status: 'PENDING'
       },
       include: {
-        job: true
+        job: true,
+        user: {
+          select: {
+            walletAddress: true,
+            twitterUsername: true
+          }
+        }
       }
     });
 
@@ -339,6 +366,203 @@ app.post('/api/jobs/:jobId/apply', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Job application error:', error);
     res.status(500).json({ error: 'Failed to apply for job' });
+  }
+});
+
+// ============================================
+// ADMIN ENDPOINTS (P4.13)
+// ============================================
+
+// Create a job (admin only)
+app.post('/api/admin/jobs', requireAdmin, async (req, res) => {
+  try {
+    const { title, description, role, reward, requirements } = req.body;
+
+    const job = await prisma.job.create({
+      data: {
+        title,
+        description,
+        role,
+        reward,
+        requirements,
+        isActive: true
+      }
+    });
+
+    res.json({ success: true, job });
+  } catch (error) {
+    console.error('Create job error:', error);
+    res.status(500).json({ error: 'Failed to create job' });
+  }
+});
+
+// Approve/reject job application (admin only)
+app.patch('/api/admin/applications/:applicationId/status', requireAdmin, async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const { status } = req.body; // 'APPROVED', 'REJECTED', 'HIRED'
+
+    if (!['APPROVED', 'REJECTED', 'HIRED'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const application = await prisma.jobApplication.update({
+      where: { id: applicationId },
+      data: { status },
+      include: {
+        job: true,
+        user: {
+          select: {
+            walletAddress: true,
+            twitterUsername: true
+          }
+        }
+      }
+    });
+
+    res.json({ success: true, application });
+  } catch (error) {
+    console.error('Update application status error:', error);
+    res.status(500).json({ error: 'Failed to update application status' });
+  }
+});
+
+// Create a bounty (admin only)
+app.post('/api/admin/bounties', requireAdmin, async (req, res) => {
+  try {
+    const { jobId, title, description, reward, requirements, expiresAt } = req.body;
+
+    const bounty = await prisma.bounty.create({
+      data: {
+        jobId,
+        title,
+        description,
+        reward,
+        requirements,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+        isActive: true
+      }
+    });
+
+    res.json({ success: true, bounty });
+  } catch (error) {
+    console.error('Create bounty error:', error);
+    res.status(500).json({ error: 'Failed to create bounty' });
+  }
+});
+
+// Approve/reject bounty submission (admin only)
+app.patch('/api/admin/bounty-submissions/:submissionId/status', requireAdmin, async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    const { status } = req.body; // 'APPROVED', 'REJECTED'
+
+    if (!['APPROVED', 'REJECTED'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const submission = await prisma.bountySubmission.update({
+      where: { id: submissionId },
+      data: { status },
+      include: {
+        bounty: true,
+        user: {
+          select: {
+            walletAddress: true,
+            twitterUsername: true
+          }
+        }
+      }
+    });
+
+    // If approved, create a payment for the reward
+    if (status === 'APPROVED') {
+      await prisma.payment.create({
+        data: {
+          userId: submission.userId,
+          amount: submission.bounty.reward,
+          currency: 'SOL',
+          type: 'BOUNTY_REWARD',
+          status: 'PENDING',
+          description: `Bounty reward: ${submission.bounty.title}`
+        }
+      });
+    }
+
+    res.json({ success: true, submission });
+  } catch (error) {
+    console.error('Update bounty submission status error:', error);
+    res.status(500).json({ error: 'Failed to update submission status' });
+  }
+});
+
+// Seed admin jobs (one-time, admin only)
+app.post('/api/admin/seed-jobs', requireAdmin, async (req, res) => {
+  try {
+    const jobs = [
+      {
+        title: 'Community Manager',
+        description: 'Manage our Discord server and engage with the community daily.',
+        role: 'COMMUNITY_MANAGER',
+        reward: 0.1,
+        requirements: 'Experience with Discord, strong communication skills.'
+      },
+      {
+        title: 'Content Creator',
+        description: 'Create engaging memes, videos, and graphics to promote $APEPLOY.',
+        role: 'CONTENT_CREATOR',
+        reward: 0.05,
+        requirements: 'Portfolio of crypto-related content.'
+      },
+      {
+        title: 'Twitter Shiller',
+        description: 'Post daily tweets about $APEPLOY and engage with other Solana communities.',
+        role: 'TWITTER_SHILLER',
+        reward: 0.02,
+        requirements: 'Active Twitter account, Solana knowledge.'
+      },
+      {
+        title: 'Moderator',
+        description: 'Monitor chat for spam, answer questions, and maintain a positive environment.',
+        role: 'MODERATOR',
+        reward: 0.03,
+        requirements: 'Previous moderation experience preferred.'
+      },
+      {
+        title: 'Research Analyst',
+        description: 'Research memecoins and identify potential partnerships.',
+        role: 'RESEARCH_ANALYST',
+        reward: 0.08,
+        requirements: 'Strong analytical skills, crypto market knowledge.'
+      },
+      {
+        title: 'Graphic Designer',
+        description: 'Design banners, logos, and marketing materials for the project.',
+        role: 'GRAPHIC_DESIGNER',
+        reward: 0.06,
+        requirements: 'Design portfolio, proficiency in Figma/Canva.'
+      },
+      {
+        title: 'Developer',
+        description: 'Help build and maintain the Apeployee platform.',
+        role: 'DEVELOPER',
+        reward: 0.15,
+        requirements: 'Solana/Anchor experience, React/Node.js skills.'
+      }
+    ];
+
+    const createdJobs = await Promise.all(
+      jobs.map(job => prisma.job.upsert({
+        where: { title_role: { title: job.title, role: job.role } },
+        update: {},
+        create: job
+      }))
+    );
+
+    res.json({ success: true, jobs: createdJobs });
+  } catch (error) {
+    console.error('Seed jobs error:', error);
+    res.status(500).json({ error: 'Failed to seed jobs' });
   }
 });
 
