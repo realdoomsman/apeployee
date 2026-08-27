@@ -120,7 +120,7 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
       </div>
 
       <Section title="Payroll settings" right={
-        <button className="btn-green" onClick={requestPayout} disabled={paying || me.balance < 5_000_000 || !me.payoutAddress} title={!me.payoutAddress ? 'Add a payout address first' : ''}>
+        <button className="btn-green" onClick={requestPayout} disabled={paying || me.balance < (status.minPayout ?? 5_000_000) || !me.payoutAddress} title={!me.payoutAddress ? 'Add a payout address first' : ''}>
           {paying ? <Spinner light /> : `Request payout (${sol(me.balance)})`}
         </button>
       }>
@@ -133,7 +133,7 @@ export default function MyDesk({ me, status, refreshMe, toast }: AppCtx & { me: 
               {syncing ? <Spinner /> : 'Sync wallet'}
             </button>
           </div>
-          <div className="label">Minimum payout 0.005 SOL{status.autopay ? ' · auto-pay runs daily' : ''}{status.payoutMode !== 'live' ? ' · settles on-chain at launch' : ''}</div>
+          <div className="label">Minimum payout {((status.minPayout ?? 5_000_000) / 1e9)} SOL{status.autopay ? ' · auto-pay runs every 10 min' : ''}{status.payoutMode !== 'live' ? ' · settles on-chain at launch' : ''}</div>
           <div className="label">Bought a Worker Pass on Magic Eden or Tensor? File that wallet above, hit Sync — the pass and its boost become yours.</div>
         </div>
       </Section>

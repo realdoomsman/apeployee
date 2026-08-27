@@ -25,7 +25,12 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}
 const TICKER = process.env.TICKER || '$APE';
 const TOKEN_NAME = process.env.TOKEN_NAME || 'Apeployee';
 const DAILY_SHILL_CAP = Number(process.env.DAILY_SHILL_CAP || 20);
-const MIN_PAYOUT_LAMPORTS = 5_000_000; // 0.005 SOL
+// Launch generosity dials (env-tunable, no redeploy of code needed):
+// PAY_RATE_MULT scales the whole wage formula; MIN_PAYOUT_SOL gates payouts.
+// NOTE: raising PAY_RATE_MULT re-prices existing shills upward on their next
+// engagement re-poll (delta is floored at 0, so lowering it never claws back).
+const PAY_RATE_MULT = Math.max(0, Number(process.env.PAY_RATE_MULT || 1)) || 1;
+const MIN_PAYOUT_LAMPORTS = Math.max(100_000, Math.round(Number(process.env.MIN_PAYOUT_SOL || 0.005) * 1e9));
 const COOKIE = 'ape_session';
 const CLUSTER = (process.env.SOLANA_RPC_URL || '').includes('devnet') ? 'devnet' : 'mainnet';
 const txExplorer = (sig) => `https://solscan.io/tx/${sig}${CLUSTER === 'devnet' ? '?cluster=devnet' : ''}`;
@@ -124,7 +129,7 @@ const rankInfo = (name) => RANKS.find((r) => r.name === name) || RANKS[0];
 // pays something immediately; engagement adds on and is topped up as it grows.
 // like 10_000, retweet 20_000, reply 5_000, view 100.
 const BASE_PER_POST = 100_000;
-const metricsToLamports = (m) => BASE_PER_POST + m.likes * 10_000 + m.retweets * 20_000 + m.replies * 5_000 + m.views * 100;
+const metricsToLamports = (m) => Math.round((BASE_PER_POST + m.likes * 10_000 + m.retweets * 20_000 + m.replies * 5_000 + m.views * 100) * PAY_RATE_MULT);
 
 function publicUser(u, extra = {}) {
   const rank = rankInfo(u.apeRank);
@@ -177,6 +182,8 @@ app.get('/api/status', (_req, res) => {
     dailyShillCap: DAILY_SHILL_CAP,
     cluster: CLUSTER,
     tokenMint: pumpfun.mint || null,
+    minPayout: MIN_PAYOUT_LAMPORTS,
+    payRate: PAY_RATE_MULT,
   });
 });
 
