@@ -224,6 +224,60 @@ async function payroll() {
   await render(svg, [], 'teaser-payroll.png');
 }
 
+// ---------- 5. PINNED POST (the whole system at a glance) ----------
+async function pinned() {
+  const W = 1080; const H = 1080;
+  const order = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
+  const boosts = { Common: '+5%', Uncommon: '+10%', Rare: '+20%', Epic: '+35%', Legendary: '+50%' };
+  const pick = (tier) => (manifest.find((m) => m.tier === tier) || { id: 1 }).id;
+  const stepBox = (x, n, title, sub) => `
+    <rect x="${x + 5}" y="405" width="280" height="150" fill="${INK}" opacity="0.25"/>
+    <rect x="${x}" y="400" width="280" height="150" fill="${CREAM}" stroke="${INK}" stroke-width="4"/>
+    <rect x="${x}" y="400" width="280" height="36" fill="${GREEN}" stroke="${INK}" stroke-width="4"/>
+    ${mono(x + 14, 426, 20, 'STEP ' + n, '#fff', 'letter-spacing="3"')}
+    ${black(x + 14, 486, 22, title)}
+    ${mono(x + 14, 526, 20, sub, '#4a4638')}`;
+  const arrow = (x) => `<polygon points="${x},462 ${x},498 ${x + 30},480" fill="${INK}"/>`;
+
+  let strip = ''; const layers = [];
+  for (let i = 0; i < order.length; i++) {
+    const x = 400 + i * 116; const y = 755;
+    strip += `
+    <rect x="${x + 4}" y="${y + 4}" width="100" height="130" fill="${INK}" opacity="0.25"/>
+    <rect x="${x}" y="${y}" width="100" height="130" fill="${CREAM}" stroke="${INK}" stroke-width="3"/>
+    ${black(x + 50, y + 122, 20, boosts[order[i]], DGREEN, 'text-anchor="middle"')}`;
+    const face = await sharp(img(pick(order[i]))).resize(84, 84).png().toBuffer();
+    layers.push({ input: face, top: y + 8, left: x + 8 });
+  }
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    ${DEFS}${bliss(W, H)}
+    ${windowChrome(40, 60, 1000, 892, 'JOB_POSTING.EXE - APEPLOYEE HR')}
+    <rect x="80" y="168" width="300" height="56" fill="${GREEN}" stroke="${INK}" stroke-width="4"/>
+    <circle cx="112" cy="196" r="11" fill="#8EDC6A" stroke="${INK}" stroke-width="3"/>
+    ${mono(136, 206, 27, 'NOW HIRING', '#fff', 'letter-spacing="4"')}
+    <rect x="620" y="168" width="380" height="56" fill="${INK}"/>
+    ${mono(642, 206, 23, 'NO WALLET CONNECT. EVER.', '#8EDC6A')}
+    ${black(80, 320, 64, 'GET PAID TO SHILL.')}
+    ${mono(80, 366, 27, 'the memecoin that puts its holders on payroll')}
+    ${stepBox(80, 1, 'SIGN IN WITH X', 'no wallet. ever.')}
+    ${arrow(365)}
+    ${stepBox(400, 2, 'POST $APEPLOYEE', 'auto-verified on X')}
+    ${arrow(685)}
+    ${stepBox(720, 3, 'GET PAID SOL', 'from creator fees')}
+    ${black(400, 652, 32, 'WORKER PASS BONUS')}
+    ${mono(400, 694, 23, 'free NFT mined every 5 approved posts')}
+    ${mono(400, 728, 23, 'wear one: up to +50% pay - Magic Eden')}
+    ${strip}
+    <rect x="80" y="894" width="920" height="46" fill="${INK}"/>
+    ${mono(100, 926, 30, 'apeployee.fun', '#8EDC6A')}
+    ${mono(700, 926, 30, '$APEPLOYEE', '#ffe98a')}
+    ${taskbar(W, H)}
+  </svg>`;
+  const card = await passCard(263, 230, -5);
+  await render(svg, [...layers, { input: card, top: 600, left: 80 }], 'teaser-pinned.png');
+}
+
 (async () => {
-  await hiring(); await howItWorks(); await tiers(); await payroll();
+  await hiring(); await howItWorks(); await tiers(); await payroll(); await pinned();
 })().catch((e) => { console.error(e); process.exit(1); });

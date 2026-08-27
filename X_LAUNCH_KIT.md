@@ -8,6 +8,7 @@ that part is yours.
 | File | Size | Use it for |
 |---|---|---|
 | `x-banner.png` | 1500×500 | X profile header |
+| `teaser-pinned.png` | 1080×1080 | **Post 3 — the pinned main post** |
 | `teaser-hiring.png` | 1080×1080 | Post 2 (announcement) + launch day |
 | `teaser-howitworks.png` | 1080×1080 | Post 3 (the thread, tweet 1) |
 | `teaser-tiers.png` | 1080×1080 | Post 4 (Worker Pass) |
@@ -59,8 +60,8 @@ Every post is ≤270 chars and fact-checked against what the site actually does.
 
 ### Post 3 — THE MAIN POST (one long post, no thread — PIN THIS)
 
-Needs X Premium (long post, ~1,300 chars). Attach `teaser-hiring.png` or
-`teaser-howitworks.png`.
+Needs X Premium (long post, ~1,300 chars). Attach `teaser-pinned.png` — it mirrors
+the post: the 3-step flow, the pass tiers, and the no-wallet badge in one image.
 
 > every other coin asks for diamond hands.
 > $APEPLOYEE asks for your resume.
