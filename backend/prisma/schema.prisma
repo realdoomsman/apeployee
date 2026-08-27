@@ -106,14 +106,16 @@ model NftPass {
 }
 
 model Payment {
-  id        String   @id @default(cuid())
-  userId    String
-  amount    Float // lamports
-  address   String
-  status    String // COMPLETED | SIMULATED | FAILED
-  signature String?
-  note      String?
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  userId          String
+  amount          Float // lamports actually sent (pool share may exceed credits)
+  creditsConsumed Float    @default(0) // wage credits burned for this payment — refunds use THIS, never amount
+  refunded        Boolean  @default(false) // idempotency: a failed payment refunds exactly once
+  address         String
+  status          String // COMPLETED | SIMULATED | FAILED
+  signature       String?
+  note            String?
+  createdAt       DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 

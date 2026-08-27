@@ -566,22 +566,36 @@ app.get('/api/stats', async (_req, res) => {
 });
 
 // ---------- payouts (idempotent, reconciled) ----------
-// Manual payouts convert wage credits 1:1. PAYDAY pool runs pass a poolShare —
-// the SOL actually sent — which can exceed the worker's credits (vault bonus).
-// consumeCredits: how many credits this payout burns (payday caps burn only the
-// proportional part, so a capped worker keeps weight for future cycles).
-async function executePayout(user, poolShare = null, consumeCredits = null) {
+// All payout paths (manual + payday) are serialized behind one mutex so the
+// vault balance a payday tick computed against can't be drained mid-run.
+let payoutChain = Promise.resolve();
+function withPayoutLock(fn) {
+  const run = payoutChain.then(fn, fn);
+  payoutChain = run.catch(() => {});
+  return run;
+}
+
+// Manual payouts convert wage credits 1:1 (floor of the Float balance). PAYDAY
+// runs pass a poolShare — the SOL actually sent. Credits burned are ALWAYS
+// min(floor(balance), amount): never more credits than SOL delivered (capped
+// workers keep the rest of their weight), never a debit above the stored Float.
+// The burned figure is persisted on the Payment so refunds use it — never amount.
+async function executePayout(user, poolShare = null) {
+  return withPayoutLock(() => executePayoutLocked(user, poolShare));
+}
+async function executePayoutLocked(user, poolShare = null) {
   // Master kill switch — blocks ALL SOL outflow (manual and payday) instantly.
   if (process.env.PAYOUTS_FROZEN === 'true') return { error: 'payroll is temporarily paused by management — wages keep accruing' };
-  const credits = consumeCredits != null
-    ? Math.max(1, Math.min(Math.round(consumeCredits), Math.round(user.balance)))
-    : Math.round(user.balance);
-  const amount = poolShare != null ? Math.round(poolShare) : credits;
-  if (credits <= 0) return { error: 'no wages accrued yet' };
+  const fresh = await prisma.user.findUnique({ where: { id: user.id } });
+  if (!fresh) return { error: 'unknown worker' };
+  const available = Math.floor(fresh.balance);
+  const amount = poolShare != null ? Math.round(poolShare) : available;
+  const credits = Math.max(1, Math.min(available, amount));
+  if (available <= 0) return { error: 'no wages accrued yet' };
   if (amount < MIN_PAYOUT_LAMPORTS) return { error: `minimum payout is ${MIN_PAYOUT_LAMPORTS / 1e9} SOL` };
   // Real X verification is required to get paid (blocks handle-squatting for wages).
-  if (!user.xVerified) return { error: 'verify your X account to get paid' };
-  if (!user.payoutAddress) return { error: 'set a payout address first (Profile → payout address)' };
+  if (!fresh.xVerified) return { error: 'verify your X account to get paid' };
+  if (!fresh.payoutAddress) return { error: 'set a payout address first (Profile → payout address)' };
 
   // Consume the wage credits atomically so concurrent requests can't double-pay.
   const reserved = await prisma.user.updateMany({ where: { id: user.id, balance: { gte: credits } }, data: { balance: { decrement: credits } } });
@@ -590,8 +604,8 @@ async function executePayout(user, poolShare = null, consumeCredits = null) {
   const bonus = Math.max(0, amount - credits);
   if (bonus > 0) await prisma.user.update({ where: { id: user.id }, data: { lifetimeEarned: { increment: bonus } } });
 
-  // Durable record BEFORE sending, so a crash mid-send is always reconcilable.
-  const payment = await prisma.payment.create({ data: { userId: user.id, amount, address: user.payoutAddress, status: 'PENDING' } });
+  // Durable record BEFORE sending — creditsConsumed is the only valid refund basis.
+  const payment = await prisma.payment.create({ data: { userId: user.id, amount, creditsConsumed: credits, address: fresh.payoutAddress, status: 'PENDING' } });
 
   if (!solana.isLive()) {
     const done = await prisma.payment.update({ where: { id: payment.id }, data: { status: 'SIMULATED', note: 'no vault key configured — no SOL moved' } });
@@ -599,21 +613,21 @@ async function executePayout(user, poolShare = null, consumeCredits = null) {
   }
 
   try {
-    const { signature, confirmed } = await solana.sendLamports(user.payoutAddress, amount);
+    const { signature, confirmed } = await solana.sendLamports(fresh.payoutAddress, amount);
     let landed = confirmed;
     if (!confirmed) landed = (await solana.signatureLanded(signature)) === 'landed';
     if (landed) {
       const done = await prisma.payment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', signature } });
-      await prisma.vaultEvent.create({ data: { type: 'PAYOUT', amount: -amount, note: `paid @${user.xUsername}` } });
+      await prisma.vaultEvent.create({ data: { type: 'PAYOUT', amount: -amount, note: `paid @${fresh.xUsername}` } });
       return { payment: done };
     }
     // Ambiguous: broadcast but not confirmed. Hold the balance; the reconcile cron finalizes.
     const held = await prisma.payment.update({ where: { id: payment.id }, data: { status: 'PENDING', signature, note: 'awaiting on-chain confirmation' } });
     return { payment: held, pending: true };
   } catch (e) {
-    // Pre-broadcast failure (no signature) → safe to refund the consumed credits.
+    // Pre-broadcast failure (no signature) → refund the consumed credits, exactly once.
     await prisma.user.update({ where: { id: user.id }, data: { balance: { increment: credits }, ...(bonus > 0 ? { lifetimeEarned: { decrement: bonus } } : {}) } });
-    await prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED', note: e.message } });
+    await prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED', refunded: true, note: e.message } });
     return { error: 'transfer failed to broadcast — balance refunded' };
   }
 }
@@ -691,22 +705,44 @@ cron.schedule('*/10 * * * *', guarded(async () => {
 }));
 
 // Reconcile PENDING live payouts against the chain (atomic claim before acting).
+// Refunds ALWAYS restore creditsConsumed — never Payment.amount, which for payday
+// pool payouts includes a vault bonus that was never debited from anyone.
 cron.schedule('*/5 * * * *', guarded(async () => {
   if (!solana.isLive()) return;
-  const pend = await prisma.payment.findMany({ where: { status: 'PENDING', signature: { not: null } } });
+
+  const refundCredits = async (p, note) => {
+    // Flip PENDING→FAILED atomically; only the winner refunds (no double-refund).
+    const won = await prisma.payment.updateMany({ where: { id: p.id, status: 'PENDING', refunded: false }, data: { status: 'FAILED', refunded: true, note } });
+    if (!won.count) return;
+    // Legacy rows predating creditsConsumed have 0 there but were 1:1 (amount == credits).
+    const credits = Math.round(p.creditsConsumed > 0 ? p.creditsConsumed : p.amount);
+    const bonus = Math.max(0, Math.round(p.amount) - credits);
+    await prisma.user.update({ where: { id: p.userId }, data: { balance: { increment: credits }, ...(bonus > 0 ? { lifetimeEarned: { decrement: bonus } } : {}) } });
+  };
+
+  const pend = await prisma.payment.findMany({ where: { status: 'PENDING' } });
   for (const p of pend) {
-    const state = await solana.signatureLanded(p.signature);
-    // Stuck 'unknown' for >30 min after a broadcast almost certainly means the
-    // blockhash expired and the tx was dropped; refund so funds aren't lost.
     const age = Date.now() - new Date(p.createdAt).getTime();
-    const drop = state === 'dropped' || (state === 'unknown' && age > 30 * 60_000);
+
+    // Crash between record and broadcast: no signature will ever appear. Refund.
+    if (!p.signature) {
+      if (age > 30 * 60_000) await refundCredits(p, 'never broadcast (crash mid-send) — credits refunded');
+      continue;
+    }
+
+    const state = await solana.signatureLanded(p.signature);
     if (state === 'landed') {
       const won = await prisma.payment.updateMany({ where: { id: p.id, status: 'PENDING' }, data: { status: 'COMPLETED' } });
       if (won.count) await prisma.vaultEvent.create({ data: { type: 'PAYOUT', amount: -Math.round(p.amount), note: `reconciled payout ${p.id}` } });
-    } else if (drop) {
-      // Flip PENDING→FAILED atomically; only the winner refunds (no double-refund).
-      const won = await prisma.payment.updateMany({ where: { id: p.id, status: 'PENDING' }, data: { status: 'FAILED', note: state === 'dropped' ? 'dropped on-chain — refunded' : 'unconfirmed >30m — refunded' } });
-      if (won.count) await prisma.user.update({ where: { id: p.userId }, data: { balance: { increment: Math.round(p.amount) } } });
+    } else if (state === 'dropped') {
+      await refundCredits(p, 'dropped on-chain — credits refunded');
+    } else if (state === 'unknown' && age > 60 * 60_000) {
+      // Double-check before treating a stale unknown as dropped: a flaky RPC
+      // answering 'unknown' for a LANDED tx would otherwise double-pay.
+      const second = await solana.signatureLanded(p.signature);
+      if (second === 'landed') continue; // next tick completes it
+      if (second !== 'dropped' && age < 6 * 3600_000) continue; // stay pending, keep checking
+      await refundCredits(p, 'unconfirmed >1h — credits refunded');
     }
   }
 }));
@@ -760,7 +796,7 @@ cron.schedule('*/10 * * * *', guarded(async () => {
     }))._sum.amount || 0);
     const dailyCap = Math.min(MAX_DAILY, BASE_DAILY + PER_SHIFT * u.totalShills);
     const headroom = Math.max(0, Math.min(Math.ceil(dailyCap / 3), dailyCap - paidToday));
-    entries.push({ u, w: Math.round(u.balance) * boost, headroom, alloc: 0 });
+    entries.push({ u, w: Math.floor(u.balance) * boost, headroom, alloc: 0 });
   }
   const totalW0 = entries.reduce((s, e) => s + e.w, 0);
   if (totalW0 <= 0) return;
@@ -788,10 +824,13 @@ cron.schedule('*/10 * * * *', guarded(async () => {
   console.log(`[payday] pool ${(pool / 1e9).toFixed(4)} SOL, ${workers.length} worker(s) — paying ${((pool - remaining) / 1e9).toFixed(4)}, rolling ${(remaining / 1e9).toFixed(4)}`);
   for (const e of entries) {
     if (e.alloc < MIN_PAYOUT_LAMPORTS) continue; // dust/capped-out rolls over — credits are kept
-    // Burn only the share of credits actually converted (capped workers keep weight).
-    const fair = Math.floor(pool * (e.w / totalW0)) || e.alloc;
-    const consume = Math.ceil(Math.round(e.u.balance) * Math.min(1, e.alloc / fair));
-    const r = await executePayout(e.u, e.alloc, consume);
+    // The pool was a snapshot — re-check the LIVE vault before each send so a
+    // concurrent manual payout can never push us into the gas reserve.
+    try {
+      const liveBal = await solana.getVaultBalance();
+      if (liveBal - RESERVE < e.alloc) { console.log('[payday] vault moved under us — stopping this tick'); break; }
+    } catch { break; }
+    const r = await executePayout(e.u, e.alloc); // burns min(floor(balance), alloc) credits
     if (r.error) console.error(`[payday] @${e.u.xUsername}: ${r.error}`);
   }
 }));
