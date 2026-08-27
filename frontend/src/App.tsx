@@ -41,7 +41,6 @@ function App() {
       const { nonce } = await nonceRes.json()
 
       // Sign nonce
-      const message = new TextEncoder().encode(`Sign this message to authenticate with Apeployee:\n\n${nonce}`)
       const encodedMessage = new TextEncoder().encode(`Sign this message to authenticate with Apeployee:\n\n${nonce}`)
       const signature = await solana.signMessage(encodedMessage, 'utf8')
 
