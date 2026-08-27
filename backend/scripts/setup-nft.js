@@ -7,8 +7,9 @@
 require('dotenv').config();
 const { createUmi } = require('@metaplex-foundation/umi-bundle-defaults');
 const { generateSigner, keypairIdentity, percentAmount } = require('@metaplex-foundation/umi');
-const { createTree } = require('@metaplex-foundation/mpl-bubblegum');
-const { createNft } = require('@metaplex-foundation/mpl-token-metadata');
+const { createTree, mplBubblegum } = require('@metaplex-foundation/mpl-bubblegum');
+const { createNft, mplTokenMetadata } = require('@metaplex-foundation/mpl-token-metadata');
+const { mplToolbox } = require('@metaplex-foundation/mpl-toolbox');
 const bs58 = require('bs58');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'http://localhost:3001';
@@ -18,35 +19,46 @@ async function main() {
   const KEY = (process.env.SOLANA_PRIVATE_KEY || '').trim();
   if (!KEY) throw new Error('set SOLANA_PRIVATE_KEY (funded on this cluster) in backend/.env first');
 
-  const umi = createUmi(RPC);
+  // Register the programs createNft/createTree need (splAssociatedToken lives in mplToolbox).
+  const umi = createUmi(RPC).use(mplToolbox()).use(mplTokenMetadata()).use(mplBubblegum());
   const secret = KEY.startsWith('[') ? Uint8Array.from(JSON.parse(KEY)) : (bs58.default || bs58).decode(KEY);
   umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(secret)));
   console.log(`authority: ${umi.identity.publicKey}`);
   console.log(`cluster:   ${RPC}`);
 
-  // Tree sized for 16384 leaves (>1000 collection + future mining seasons).
-  const merkleTree = generateSigner(umi);
-  console.log('\ncreating Merkle tree…');
-  await (await createTree(umi, { merkleTree, maxDepth: 14, maxBufferSize: 64 })).sendAndConfirm(umi);
-  console.log(`  tree: ${merkleTree.publicKey}`);
+  // Reuse an existing tree/collection if already created (so a re-run never double-spends).
+  let tree = (process.env.NFT_MERKLE_TREE || '').trim();
+  if (tree) {
+    console.log(`\nusing existing Merkle tree: ${tree}`);
+  } else {
+    const merkleTree = generateSigner(umi);
+    console.log('\ncreating Merkle tree…');
+    await (await createTree(umi, { merkleTree, maxDepth: 14, maxBufferSize: 64 })).sendAndConfirm(umi);
+    tree = merkleTree.publicKey;
+    console.log(`  tree: ${tree}`);
+  }
 
-  console.log('creating collection NFT…');
-  const collectionMint = generateSigner(umi);
-  await createNft(umi, {
-    mint: collectionMint,
-    name: 'Apeployee Worker Pass',
-    uri: `${PUBLIC_BASE_URL}/nft/collection.json`,
-    sellerFeeBasisPoints: percentAmount(5),
-    isCollection: true,
-  }).sendAndConfirm(umi);
-  console.log(`  collection: ${collectionMint.publicKey}`);
+  let collection = (process.env.NFT_COLLECTION_MINT || '').trim();
+  if (collection) {
+    console.log(`using existing collection: ${collection}`);
+  } else {
+    console.log('creating collection NFT…');
+    const collectionMint = generateSigner(umi);
+    await createNft(umi, {
+      mint: collectionMint,
+      name: 'Apeployee Worker Pass',
+      uri: `${PUBLIC_BASE_URL}/nft/collection.json`,
+      sellerFeeBasisPoints: percentAmount(5),
+      isCollection: true,
+    }).sendAndConfirm(umi);
+    collection = collectionMint.publicKey;
+    console.log(`  collection: ${collection}`);
+  }
 
-  console.log('\n=== add these to backend/.env ===');
-  console.log(`NFT_MERKLE_TREE="${merkleTree.publicKey}"`);
-  console.log(`NFT_COLLECTION_MINT="${collectionMint.publicKey}"`);
-  console.log('=================================');
-  console.log('Then restart the server; newly mined passes will mint on-chain.');
-  console.log('Backfill already-mined passes with: node scripts/mint-existing.js');
+  console.log('\n=== add these to Railway variables (and backend/.env) ===');
+  console.log(`NFT_MERKLE_TREE="${tree}"`);
+  console.log(`NFT_COLLECTION_MINT="${collection}"`);
+  console.log('==========================================================');
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -8,7 +8,9 @@ const {
 const {
   keypairIdentity, publicKey, none, some,
 } = require('@metaplex-foundation/umi');
-const { mintToCollectionV1, parseLeafFromMintToCollectionV1Transaction } = require('@metaplex-foundation/mpl-bubblegum');
+const { mintToCollectionV1, mplBubblegum } = require('@metaplex-foundation/mpl-bubblegum');
+const { mplTokenMetadata } = require('@metaplex-foundation/mpl-token-metadata');
+const { mplToolbox } = require('@metaplex-foundation/mpl-toolbox');
 const bs58 = require('bs58');
 
 const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
@@ -21,7 +23,8 @@ const TICKER = process.env.TICKER || '$APE';
 let umi = null;
 if (KEY && TREE && COLLECTION) {
   try {
-    umi = createUmi(RPC);
+    // Register the programs mintToCollectionV1 needs (bubblegum, token-metadata, splAssociatedToken).
+    umi = createUmi(RPC).use(mplToolbox()).use(mplTokenMetadata()).use(mplBubblegum());
     const secret = KEY.startsWith('[') ? Uint8Array.from(JSON.parse(KEY)) : (bs58.default || bs58).decode(KEY);
     const kp = umi.eddsa.createKeypairFromSecretKey(secret);
     umi.use(keypairIdentity(kp));
