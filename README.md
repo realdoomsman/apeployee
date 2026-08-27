@@ -1,360 +1,70 @@
-# 🦍 Apeployee
+# 🦍 APEPLOYEE
 
-**The First Memecoin Where You Get PAID to Shill Your Bags**
+**The first memecoin where you get PAID to shill your bags.**
 
-> "The market is rough. People need work. We're the first memecoin where the community gets jobs — real positions, real pay, for working for your bags."
+> The market is rough. People need work. We're hiring.
 
-## 🌟 What is Apeployee?
+Apply for a monkey-themed job, get **APELOYED**, post about the ticker on X, and get
+paid SOL from pump.fun creator fees — while **Worker Pass NFTs auto-mine** to your
+locker and boost your pay. **No wallet ever connects to the site**: you sign in with
+your X account and just paste the Solana address your wages should go to.
 
-Apeployee is a revolutionary platform that transforms memecoin shilling into a legitimate job market. Users can apply for positions like **Bag Worker**, **Meme Maker**, **Shill Captain**, and **Ape Artist**, then get paid in SOL for every engagement they generate.
+## How it works
 
-### Core Features
+1. **Sign in with X** (OAuth 2.0 PKCE — proves you own the account). No keys configured? The app runs in clearly-labeled demo mode.
+2. **Get a job** — 7 roles (Bag Worker, Meme Maker, Shill Captain, Reply Guy, Chart Watcher, Vibe Manager, Banana Accountant). Instant hire; your first job mines you a welcome Worker Pass.
+3. **Shill** — paste a link to your own X post that mentions the ticker. The server verifies the author and the mention, then pays wages by engagement: `(likes·10k + RTs·20k + replies·5k + views·100 lamports) × rank × pass boost`. Engagement is re-polled for 48h so wages grow with the post.
+4. **Rank up** — Chimpanzee → Baboon → Orangutan → Gorilla → Silverback (1.0x → 3.0x pay).
+5. **Auto-mine NFTs** — every 5 shills mines a Worker Pass from the 1000-piece collection (5 tiers, Common→Legendary). Your best pass sets a 1.05x–1.5x pay boost.
+6. **Get paid** — payouts go straight to your pasted address from the vault wallet; optional daily auto-pay cron. Vault is funded by pump.fun creator-fee sweeps.
 
-- **Job Application System** → Apply for real positions with base pay + performance bonuses
-- **X Account Verification** → Link and verify your Twitter account
-- **Automated Shill Tracking** → Track tweets, engagement metrics, and earnings automatically
-- **Pump.fun Integration** → Auto-distribute creator fees to workers
-- **Vault Wallet Automation** → Treasury management with on-chain transparency
-- **Ape Rank System** → Level up from Chimpanzee → Silverback (3x earnings multiplier)
-- **Bounty Board** → Complete specific shilling missions for upfront SOL payouts
-- **Referral Program** → Earn 10% of referred users' first month earnings
-- **Performance Dashboard** → Real-time stats, earnings, and leaderboard
-- **On-Chain Badges** → NFT reputation badges for milestones
-- **Auto-Reinvest** → Compound earnings back into more tokens
-- **Monkey Business DAO** → Governance tokens for long-term contributors
+## Stack
 
-## 🏗️ Architecture
+- **Backend** — Node/Express + Prisma on **SQLite** (zero setup; swap the provider for Postgres in production). X API for verification/metrics, `@solana/web3.js` for payouts, node-cron for re-polling + auto-pay.
+- **Frontend** — React 18 + Vite + Tailwind, dark jungle-office theme, the NFT art as the visual identity.
+- **NFTs** — `nft/` holds the full 1000-pass generative collection (deterministic generator, images, Metaplex metadata, manifest). On-chain cNFT minting via Metaplex Bubblegum is the next phase; the register tracks `mintSig` per pass.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Apeployee Platform                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │   React 19   │  │  Express.js  │  │   Anchor     │          │
-│  │   Frontend   │  │   Backend    │  │  Solana      │          │
-│  │              │  │              │  │  Program     │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-│         │                 │                 │                   │
-│         ▼                 ▼                 ▼                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │  Phantom     │  │  Prisma +    │  │   Vault      │          │
-│  │  Wallet      │  │  PostgreSQL  │  │   Treasury   │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────┐     │
-│  │              External Integrations                       │     │
-│  │  • X (Twitter) API for shill tracking                  │     │
-│  │  • Pump.fun API for fee distribution                   │     │
-│  │  • Solana RPC for on-chain payments                    │     │
-│  └────────────────────────────────────────────────────────┘     │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+## Run it
 
-## 🚀 Tech Stack
-
-### Frontend
-- **React 19** + **TypeScript** + **Vite**
-- **Tailwind CSS** with custom ape-themed design system
-- **Lucide React** icons
-- **Phantom Wallet** integration
-- **@solana/web3.js** for wallet connections
-
-### Backend
-- **Node.js** + **Express.js**
-- **Prisma ORM** + **PostgreSQL**
-- **@solana/web3.js** for on-chain operations
-- **X (Twitter) API** for shill tracking
-- **Axios** for external API calls
-
-### Smart Contract
-- **Anchor Framework** (Solana)
-- **Vault Treasury** for fee collection and distribution
-- **On-chain payment records**
-- **Authority-based access control**
-
-### Database
-- **PostgreSQL** with Prisma ORM
-- Complete schema for users, jobs, shills, payments, bounties, referrals, badges
-
-## 📦 Installation
-
-### Prerequisites
-- Node.js 18+
-- PostgreSQL 14+
-- Solana CLI
-- Anchor Framework
-- Rust (for building Anchor programs)
-
-### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-org/Apeployed.git
-cd Apeployed
+cd backend
+npm install
+npx prisma db push
+node seed.js        # 7 jobs + the 1000-pass NFT register
+node server.js      # API on :3001
 ```
 
-### 2. Install Dependencies
-
-**Frontend:**
 ```bash
 cd frontend
 npm install
+npm run dev         # UI on :5173 (proxies /api and /nft to :3001)
 ```
 
-**Backend:**
-```bash
-cd ../backend
-npm install
+Open http://localhost:5173 — with no API keys set, the app runs in demo mode
+(handle-only sign-in, simulated engagement and payouts, all labeled in the UI).
+
+## Going live
+
+Fill in `backend/.env`:
+
+| Variable | Effect when set |
+|---|---|
+| `TWITTER_CLIENT_ID` / `TWITTER_CLIENT_SECRET` | Real "Sign in with X" (OAuth 2.0 PKCE) |
+| `TWITTER_BEARER_TOKEN` | Real tweet verification + engagement metrics (X API is pay-per-use: ~$0.005/tweet read) |
+| `SOLANA_PRIVATE_KEY` | Real SOL payouts from the vault keypair (start on devnet!) |
+| `AUTOPAY=true` | Daily automatic payout run at 12:00 |
+| `TICKER` | The cashtag every shill must mention |
+
+**Honest warnings** (read before launch):
+- X banned "reward users for posting" apps in Jan 2026 (the InfoFi purge) and revokes API keys without notice. Weight rewards toward holding + on-site work, keep tweet submission opt-in, and have a fallback plan.
+- Paid token promotion without disclosure can create legal exposure (FTC). Encourage workers to disclose.
+- The vault is a hot wallet: fund it with only what you're ready to pay out.
+
+## Repo map
+
 ```
-
-**Smart Contract:**
-```bash
-cd ../programs
-npm install
+backend/    Express API + Prisma schema + seed (SQLite dev.db)
+frontend/   React app (views in src/views, theme in src/index.css)
+nft/        Worker Pass collection: generator, 1000 images + metadata, manifest
+programs/   (parked) Anchor vault program — superseded by the backend hot wallet for now
 ```
-
-### 3. Set Up Environment Variables
-
-**Backend (backend/.env):**
-```env
-DATABASE_URL="postgresql://user:password@localhost:5432/apeployed"
-SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
-SOLANA_PRIVATE_KEY="[...]vault_private_key_array"
-PUMPFUN_API_KEY="your_pumpfun_api_key"
-PUMPFUN_CREATOR_WALLET="creator_wallet_address"
-PUMPFUN_TREASURY_WALLET="treasury_wallet_address"
-TWITTER_API_KEY="your_twitter_api_key"
-TWITTER_API_SECRET="your_twitter_api_secret"
-TWITTER_BEARER_TOKEN="your_twitter_bearer_token"
-TWITTER_CALLBACK_URL="http://localhost:5173/auth/twitter/callback"
-JWT_SECRET="your-super-secret-jwt-key"
-PORT=3001
-FRONTEND_URL="http://localhost:5173"
-```
-
-**Frontend (frontend/.env):**
-```env
-VITE_API_URL=http://localhost:3001
-VITE_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-```
-
-### 4. Set Up Database
-
-**Create PostgreSQL database:**
-```bash
-createdb apeployed
-```
-
-**Run Prisma migrations:**
-```bash
-cd backend
-npx prisma migrate dev --name init
-npx prisma generate
-```
-
-### 5. Build and Deploy Smart Contract
-
-**Build the Anchor program:**
-```bash
-cd ..
-anchor build
-```
-
-**Deploy to Solana:**
-```bash
-# Set network (devnet for testing, mainnet for production)
-solana config set --url mainnet
-
-# Deploy
-anchor deploy
-```
-
-**Update program ID in:**
-- `programs/Cargo.toml`
-- `Anchor.toml`
-- `programs/src/lib.rs`
-
-## 🎮 Usage
-
-### Start Development Servers
-
-**Backend:**
-```bash
-cd backend
-node server.js
-```
-
-**Frontend:**
-```bash
-cd frontend
-npm run dev
-```
-
-Visit `http://localhost:5173` to see the Apeployee dashboard.
-
-### Smart Contract Operations
-
-**Initialize Vault:**
-```bash
-anchor test --test init_vault
-```
-
-**Collect Fees:**
-```bash
-anchor test --test collect_fees
-```
-
-**Distribute Earnings:**
-```bash
-anchor test --test distribute_earnings
-```
-
-## 📊 Database Schema
-
-Key models:
-- **User** → Wallet address, X account, ape rank, earnings, reputation
-- **Job** → Available positions with base pay and bonuses
-- **JobApplication** → User applications with status tracking
-- **ShillRecord** → Tweet tracking with engagement metrics
-- **Payment** → Payment history and on-chain transaction hashes
-- **Bounty** → Specific tasks with upfront rewards
-- **Referral** → Referral tracking and bonus management
-- **Badge** → On-chain reputation badges (NFTs)
-
-See `prisma/schema.prisma` for complete schema.
-
-## 🦍 Ape Rank System
-
-| Rank | Shills Required | Earning Multiplier |
-|------|-----------------|-------------------|
-| 🐒 Chimpanzee | 0 | 1.0x |
-| 🦍 Baboon | 100 | 1.2x |
-| 🦧 Orangutan | 500 | 1.5x |
-| 🦍 Gorilla | 1,000 | 2.0x |
-| 👑 Silverback | 5,000 | 3.0x |
-
-## 💰 Earnings Calculation
-
-**Shill Earnings Formula:**
-```
-earnings = (likes × 0.00001) + (retweets × 0.00002) + (views × 0.0000001)
-final_earnings = earnings × rank_multiplier
-```
-
-**Example:**
-- Tweet with 100 likes, 20 retweets, 1,000 views
-- Base: (100 × 0.00001) + (20 × 0.00002) + (1000 × 0.0000001) = 0.0017 SOL
-- With Baboon rank (1.2x): 0.00204 SOL
-
-## 🔐 Security
-
-- **Vault Wallet** → Private key encrypted in environment variables
-- **Authority Control** → Only authorized addresses can distribute funds
-- **On-Chain Records** → Every payment recorded immutably
-- **Rate Limiting** → API endpoints protected from abuse
-- **X Verification** → OAuth 2.0 secure authentication
-
-## 🚢 Deployment
-
-### Frontend (Vercel/Railway)
-```bash
-cd frontend
-npm run build
-# Deploy to Vercel: vercel --prod
-# Deploy to Railway: railway up
-```
-
-### Backend (Railway/Heroku)
-```bash
-cd backend
-# Deploy to Railway: railway up
-# Deploy to Heroku: heroku create
-```
-
-### Database (Railway/Supabase/Neon)
-- Use managed PostgreSQL service
-- Update `DATABASE_URL` in environment variables
-
-### Smart Contract
-```bash
-# Ensure you're on mainnet
-solana config set --url mainnet
-
-# Deploy
-anchor deploy --provider.cluster mainnet
-```
-
-## 🧪 Testing
-
-**Backend Tests:**
-```bash
-cd backend
-npm test
-```
-
-**Smart Contract Tests:**
-```bash
-anchor test
-```
-
-**Frontend Tests:**
-```bash
-cd frontend
-npm test
-```
-
-## 📈 Roadmap
-
-### Phase 1: MVP ✅
-- [x] Wallet connection
-- [x] Job application system
-- [x] Shill tracking
-- [x] Basic payments
-- [x] Ape rank system
-
-### Phase 2: Advanced Features
-- [ ] Pump.fun integration
-- [ ] Auto-reinvest system
-- [ ] On-chain NFT badges
-- [ ] Referral program
-- [ ] DAO governance
-
-### Phase 3: Scaling
-- [ ] Multi-token support
-- [ ] Advanced analytics
-- [ ] Mobile app
-- [ ] Enterprise partnerships
-
-## 🤝 Contributing
-
-Contributions welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 License
-
-MIT License - see LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- Solana ecosystem
-- Pump.fun platform
-- X (Twitter) API
-- Phantom wallet
-- The memecoin community
-
-## 📞 Support
-
-- Discord: [Join our server]
-- Twitter: [@Apeployee]
-- GitHub Issues: [Report bugs]
-
----
-
-**Built with ❤️ by the Apeployee team**
-
-*Remember: The market is rough. People need work. We're hiring.* 🦍💰

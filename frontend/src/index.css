@@ -3,157 +3,58 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 20 20% 15%;
-    --card: 0 0% 100%;
-    --card-foreground: 20 20% 15%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 20 20% 15%;
-    --primary: 24 40% 50%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 20 30% 90%;
-    --secondary-foreground: 20 20% 15%;
-    --muted: 20 30% 90%;
-    --muted-foreground: 20 15% 45%;
-    --accent: 142 70% 50%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 20 20% 85%;
-    --input: 20 20% 85%;
-    --ring: 24 40% 50%;
-    --radius: 0.5rem;
-  }
-
-  .dark {
-    --background: 20 20% 8%;
-    --foreground: 0 0% 95%;
-    --card: 20 20% 10%;
-    --card-foreground: 0 0% 95%;
-    --popover: 20 20% 10%;
-    --popover-foreground: 0 0% 95%;
-    --primary: 24 40% 60%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 20 20% 15%;
-    --secondary-foreground: 0 0% 95%;
-    --muted: 20 20% 15%;
-    --muted-foreground: 20 10% 55%;
-    --accent: 142 70% 50%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 62% 50%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 20 20% 18%;
-    --input: 20 20% 18%;
-    --ring: 24 40% 60%;
-  }
-}
-
-@layer base {
-  * {
-    @apply border-border;
-  }
+  html { @apply bg-night-900; }
   body {
-    @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    @apply bg-night-900 text-ink font-body antialiased min-h-screen;
+    background-image:
+      radial-gradient(1000px 500px at 85% -10%, rgba(87, 166, 58, 0.14), transparent 60%),
+      radial-gradient(900px 480px at -10% 100%, rgba(255, 211, 77, 0.07), transparent 55%);
+    background-attachment: fixed;
   }
+  ::selection { @apply bg-banana text-night-900; }
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+@layer components {
+  .card { @apply bg-night-800/90 border border-line rounded-2xl; }
+  .card-pad { @apply card p-5; }
+
+  .btn { @apply inline-flex items-center justify-center gap-2 font-semibold rounded-xl px-4 py-2.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed select-none; }
+  .btn-primary { @apply btn bg-banana text-night-900 hover:bg-banana-dark active:scale-[0.98] shadow-[0_0_24px_rgba(255,211,77,0.25)]; }
+  .btn-green { @apply btn bg-jungle text-white hover:bg-jungle-dark active:scale-[0.98]; }
+  .btn-ghost { @apply btn bg-night-700 text-ink border border-line hover:border-jungle/60; }
+
+  .input { @apply w-full bg-night-900 border border-line rounded-xl px-4 py-2.5 text-ink placeholder:text-mute/60 outline-none focus:border-banana/70 transition-colors; }
+
+  .chip { @apply inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-2.5 py-1 border; }
+
+  .navlink { @apply px-3.5 py-2 rounded-xl text-sm font-semibold text-mute hover:text-ink transition-colors cursor-pointer; }
+  .navlink-active { @apply text-night-900 bg-banana hover:text-night-900; }
+
+  .stat-num { @apply font-display text-2xl md:text-3xl font-bold tracking-tight; }
+
+  .progress-track { @apply h-2.5 w-full rounded-full bg-night-600 overflow-hidden; }
+  .progress-fill {
+    @apply h-full rounded-full;
+    background: linear-gradient(90deg, #57a63a, #ffd34d, #57a63a);
+    background-size: 200% 100%;
+    animation: shimmer 2.4s linear infinite;
   }
+
+  /* Worker Pass tier frames */
+  .tier-Common { @apply border-[#5c6b60]; box-shadow: 0 0 0 1px rgba(92, 107, 96, 0.3); }
+  .tier-Uncommon { @apply border-jungle; box-shadow: 0 0 18px rgba(87, 166, 58, 0.35); }
+  .tier-Rare { @apply border-[#2D9CDB]; box-shadow: 0 0 18px rgba(45, 156, 219, 0.4); }
+  .tier-Epic { @apply border-[#B36BFF]; box-shadow: 0 0 22px rgba(179, 107, 255, 0.45); }
+  .tier-Legendary { @apply border-banana; box-shadow: 0 0 28px rgba(255, 211, 77, 0.55); }
+
+  .text-tier-Common { color: #9aa79f; }
+  .text-tier-Uncommon { color: #6dbe49; }
+  .text-tier-Rare { color: #4db2ec; }
+  .text-tier-Epic { color: #c48aff; }
+  .text-tier-Legendary { color: #ffd34d; }
 }
 
-/* Custom ape-themed components */
-.ape-card {
-  @apply bg-card border border-border rounded-xl p-6 shadow-lg hover:shadow-xl transition-all duration-300;
-}
-
-.ape-button {
-  @apply px-6 py-3 rounded-lg font-semibold transition-all duration-300 transform hover:scale-105 active:scale-95;
-}
-
-.ape-button-primary {
-  @apply bg-jungle-green-500 text-white hover:bg-jungle-green-600 shadow-lg hover:shadow-jungle-green-500/25;
-}
-
-.ape-button-secondary {
-  @apply bg-ape-brown-600 text-white hover:bg-ape-brown-700 shadow-lg hover:shadow-ape-brown-600/25;
-}
-
-.ape-button-accent {
-  @apply bg-banana-yellow-500 text-ape-brown-950 hover:bg-banana-yellow-600 shadow-lg hover:shadow-banana-yellow-500/25;
-}
-
-.ape-input {
-  @apply w-full px-4 py-3 rounded-lg border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-all;
-}
-
-.ape-badge {
-  @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
-}
-
-.ape-badge-rank {
-  @apply ape-badge bg-ape-brown-100 text-ape-brown-800 border border-ape-brown-200;
-}
-
-.ape-badge-status {
-  @apply ape-badge;
-}
-
-.ape-status-pending {
-  @apply bg-yellow-100 text-yellow-800 border border-yellow-200;
-}
-
-.ape-status-approved {
-  @apply bg-jungle-green-100 text-jungle-green-800 border border-jungle-green-200;
-}
-
-.ape-status-rejected {
-  @apply bg-red-100 text-red-800 border border-red-200;
-}
-
-.ape-status-hired {
-  @apply bg-banana-yellow-100 text-banana-yellow-800 border border-banana-yellow-200;
-}
-
-/* Jungle pattern background */
-.jungle-pattern {
-  background-color: #0a0f0a;
-  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%231a3a1a' fill-opacity='0.15'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-track {
-  @apply bg-ape-brown-50;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-ape-brown-400 rounded-full;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-ape-brown-500;
-}
-
-/* Animations */
-@keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-}
-
-.float-animation {
-  animation: float 3s ease-in-out infinite;
-}
-
-/* Banana decoration */
-.banana-decoration {
-  background: linear-gradient(135deg, #fef08a 0%, #facc15 50%, #eab308 100%);
-  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
-}
+/* thin scrollbars that match the theme */
+* { scrollbar-width: thin; scrollbar-color: #26382c transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #26382c; border-radius: 8px; }

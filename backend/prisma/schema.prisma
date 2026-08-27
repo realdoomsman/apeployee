@@ -1,272 +1,125 @@
-// Apeployee Database Schema
-// First memecoin where you get paid to shill your bags
+// Apeployee Database Schema v2 — X-account identity, no wallet connect.
+// SQLite so the app runs anywhere with zero setup; swap provider for production.
+// Note: SQLite has no enums — status/tier fields are strings, documented inline.
+// Money is stored as integer lamports in Float columns (exact below 2^53);
+// every write rounds to an integer.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
-// User: Represents an Apeployee
 model User {
-  id                String    @id @default(cuid())
-  walletAddress     String    @unique
-  twitterUsername   String?   @unique
-  twitterId         String?   @unique
-  twitterVerified   Boolean   @default(false)
-  twitterOAuthToken String?   // Encrypted
-  email             String?   @unique
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id             String   @id @default(cuid())
+  xId            String?  @unique // X account id (live OAuth mode)
+  xUsername      String   @unique // handle, without @
+  xVerified      Boolean  @default(false) // true only via real X OAuth
+  demo           Boolean  @default(false) // created via demo sign-in (no X creds configured)
+  payoutAddress  String? // Solana address the user pasted; destination only, never connected
+  apeRank        String   @default("CHIMPANZEE") // CHIMPANZEE|BABOON|ORANGUTAN|GORILLA|SILVERBACK
+  totalShills    Int      @default(0)
+  balance        Float    @default(0) // claimable lamports
+  lifetimeEarned Float    @default(0) // lamports ever earned
+  nftBoost       Float    @default(1.0) // highest owned pass boost; written by NFT service only
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  // Ape Rank System
-  apeRank           ApeRank   @default(CHIMPANZEE)
-  totalEarnings     Float     @default(0)
-  totalShillCount   Int       @default(0)
-  reputationScore   Float     @default(0)
-  nftBoostMultiplier Float    @default(1.0) // Claude's lane - read only
-
-  // Relations
-  jobs              JobApplication[]
-  shillRecords      ShillRecord[]
-  payments          Payment[]
-  referrals         Referral[]         @relation("Referrer")
-  referredBy        Referral?          @relation("Referee")
-  badges            UserBadge[]
-  bounties          BountySubmission[]
-  vaultTransactions VaultTransaction[]
-
-  @@index([walletAddress])
-  @@index([twitterUsername])
+  applications Application[]
+  shills       ShillRecord[]
+  payments     Payment[]
+  passes       NftPass[]
 }
 
-// Job roles available on the platform
-enum JobRole {
-  BAG_WORKER        // Basic shilling
-  MEME_MAKER        // Create memes
-  SHILL_CAPTAIN     // Lead shilling campaigns
-  APE_ARTIST        // Create ape-themed art
-  CONTENT_WRITER    // Write copy
-  MODERATOR         // Community moderation
-  VAULT_KEEPER      // Vault operations
-}
-
-// Job postings
 model Job {
-  id          String    @id @default(cuid())
+  id          String  @id @default(cuid())
+  role        String  @unique // BAG_WORKER | MEME_MAKER | ...
   title       String
+  emoji       String
   description String
-  role        JobRole
-  basePay     Float     // Base SOL pay
-  bonusPay    Float     @default(0) // Performance bonus
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  perk        String // flavor text shown on the job card
+  openings    Int     @default(999)
+  active      Boolean @default(true)
 
-  applications JobApplication[]
-  bounties     Bounty[]
+  applications Application[]
 }
 
-// Job applications
-model JobApplication {
+model Application {
   id        String   @id @default(cuid())
   userId    String
   jobId     String
-  status    ApplicationStatus @default(PENDING)
-  coverLetter String?
+  status    String   @default("APELOYED") // APELOYED | PENDING | REJECTED
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+  job  Job  @relation(fields: [jobId], references: [id])
 
   @@unique([userId, jobId])
-  @@index([userId])
-  @@index([jobId])
 }
 
-enum ApplicationStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  HIRED
-}
-
-// Ape Rank System
-enum ApeRank {
-  CHIMPANZEE    // Entry level
-  BABOON        // 100+ shills
-  ORANGUTAN     // 500+ shills
-  GORILLA       // 1000+ shills
-  SILVERBACK    // 5000+ shills (top tier)
-}
-
-// Shill tracking records
 model ShillRecord {
-  id            String   @id @default(cuid())
-  userId        String
-  tweetId       String   @unique
-  tweetContent  String
-  tickerMention String?  // Which ticker was shilled
-  likes         Int      @default(0)
-  retweets      Int      @default(0)
-  replies       Int      @default(0)
-  views         Int      @default(0)
-  earnings      Float    @default(0)
-  verifiedAt    DateTime @default(now())
-  createdAt     DateTime @default(now())
+  id           String    @id @default(cuid())
+  tweetId      String    @unique // global first-claim dedup
+  userId       String
+  text         String?
+  likes        Int       @default(0)
+  retweets     Int       @default(0)
+  replies     Int       @default(0)
+  views        Int       @default(0)
+  earned       Float     @default(0) // lamports credited so far for this tweet
+  simulated    Boolean   @default(false) // true when metrics are demo-generated
+  createdAt    DateTime  @default(now())
+  lastPolledAt DateTime?
 
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
 
-  @@index([userId])
-  @@index([tweetId])
-  @@index([createdAt])
+  @@index([userId, createdAt])
 }
 
-// Payment records
+// The NFT register: all 1000 Worker Passes from nft/output, imported at seed time.
+// ownerId set when a pass is mined to a worker; mintSig set once minted on-chain.
+model NftPass {
+  id         Int       @id // 1..1000, matches nft/output image/metadata numbering
+  tier       String // Common | Uncommon | Rare | Epic | Legendary
+  boost      Float // 1.05 .. 1.5
+  background String
+  fur        String
+  outfit     String
+  eyewear    String
+  headwear   String
+  item       String
+  ownerId    String?
+  minedAt    DateTime?
+  mintSig    String? // on-chain cNFT mint signature once minted (later phase)
+
+  owner User? @relation(fields: [ownerId], references: [id])
+
+  @@index([ownerId])
+  @@index([tier, ownerId])
+}
+
 model Payment {
-  id              String      @id @default(cuid())
-  userId          String
-  amount          Float
-  currency        String      @default("SOL")
-  type            PaymentType
-  status          PaymentStatus @default(PENDING)
-  transactionHash String?     @unique
-  createdAt       DateTime    @default(now())
-  processedAt     DateTime?
-
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([status])
-  @@index([createdAt])
-}
-
-enum PaymentType {
-  SHILL_EARNINGS
-  JOB_SALARY
-  BOUNTY_REWARD
-  REFERRAL_BONUS
-  RANK_BONUS
-}
-
-enum PaymentStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-}
-
-// Referral system
-model Referral {
-  id             String   @id @default(cuid())
-  referrerId     String
-  refereeId      String   @unique
-  bonusAmount    Float    @default(0)
-  bonusPaid      Boolean  @default(false)
-  createdAt      DateTime @default(now())
-
-  referrer       User     @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
-  referee        User     @relation("Referee", fields: [refereeId], references: [id], onDelete: Cascade)
-
-  @@index([referrerId])
-  @@index([refereeId])
-}
-
-// Bounty system for specific tasks
-model Bounty {
-  id          String   @id @default(cuid())
-  jobId       String?
-  title       String
-  description String
-  reward      Float
-  targetMetric String  // e.g., "100 retweets", "1000 likes"
-  currentProgress Int  @default(0)
-  targetValue  Int
-  expiresAt   DateTime?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-
-  job         Job?     @relation(fields: [jobId], references: [id])
-  submissions BountySubmission[]
-
-  @@index([isActive])
-  @@index([expiresAt])
-}
-
-model BountySubmission {
-  id          String   @id @default(cuid())
-  bountyId    String
-  userId      String
-  proofUrl    String   // Tweet URL, etc.
-  status      SubmissionStatus @default(PENDING)
-  reviewedAt  DateTime?
-  createdAt   DateTime @default(now())
-
-  bounty      Bounty   @relation(fields: [bountyId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([bountyId, userId])
-  @@index([bountyId])
-  @@index([userId])
-}
-
-enum SubmissionStatus {
-  PENDING
-  APPROVED
-  REJECTED
-}
-
-// On-chain reputation badges (NFT metadata)
-model Badge {
-  id          String   @id @default(cuid())
-  name        String
-  description String
-  iconUrl     String
-  requirement String   // e.g., "Complete 100 shills"
-  mintAddress String?  @unique // NFT mint address if minted
-  createdAt   DateTime @default(now())
-
-  userBadges  UserBadge[]
-}
-
-model UserBadge {
   id        String   @id @default(cuid())
   userId    String
-  badgeId   String
-  mintedAt  DateTime @default(now())
+  amount    Float // lamports
+  address   String
+  status    String // COMPLETED | SIMULATED | FAILED
+  signature String?
+  note      String?
+  createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
 
-  @@unique([userId, badgeId])
-  @@index([userId])
+  @@index([userId, createdAt])
 }
 
-// Vault transactions for treasury management
-model VaultTransaction {
-  id            String   @id @default(cuid())
-  userId        String
-  type          VaultTransactionType
-  amount        Float
-  tokenMint     String?  // For non-SOL tokens
-  description   String
-  transactionHash String @unique
-  createdAt     DateTime @default(now())
-
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([type])
-}
-
-enum VaultTransactionType {
-  DEPOSIT           // User deposits to vault
-  WITHDRAWAL        // User withdraws
-  EARNING_PAYOUT    // System pays user
-  FEE_DISTRIBUTION  // Pump.fun fee distribution
-  REINVESTMENT      // Auto-reinvest earnings
+model VaultEvent {
+  id        String   @id @default(cuid())
+  type      String // FEE_SWEEP | PAYOUT | ADJUST
+  amount    Float // lamports, positive = into vault
+  note      String?
+  createdAt DateTime @default(now())
 }
