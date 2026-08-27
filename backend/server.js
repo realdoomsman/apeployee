@@ -14,6 +14,7 @@ const dotenv = require('dotenv');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const nacl = require('tweetnacl');
+const crypto = require('crypto');
 
 dotenv.config();
 
@@ -150,6 +151,124 @@ app.post('/api/auth/wallet', async (req, res) => {
   } catch (error) {
     console.error('Wallet auth error:', error);
     res.status(500).json({ error: 'Failed to authenticate wallet' });
+  }
+});
+
+// ============================================
+// TWITTER OAUTH 2.0 PKCE
+// ============================================
+
+// In-memory store for OAuth state (use Redis in production)
+const oauthStore = new Map();
+
+// Start Twitter OAuth flow
+app.get('/api/auth/twitter/start', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Generate PKCE verifier and challenge
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    const state = crypto.randomBytes(16).toString('base64url');
+
+    // Store OAuth state
+    oauthStore.set(state, {
+      verifier,
+      userId,
+      createdAt: Date.now()
+    });
+
+    // Twitter OAuth 2.0 URL
+    const twitterAuthUrl = new URL('https://twitter.com/i/oauth2/authorize');
+    twitterAuthUrl.searchParams.append('response_type', 'code');
+    twitterAuthUrl.searchParams.append('client_id', process.env.TWITTER_CLIENT_ID || '');
+    twitterAuthUrl.searchParams.append('redirect_uri', process.env.TWITTER_CALLBACK_URL || 'http://localhost:5173/auth/twitter/callback');
+    twitterAuthUrl.searchParams.append('scope', 'tweet.read users.read offline.access');
+    twitterAuthUrl.searchParams.append('state', state);
+    twitterAuthUrl.searchParams.append('code_challenge', challenge);
+    twitterAuthUrl.searchParams.append('code_challenge_method', 'S256');
+
+    res.json({ authUrl: twitterAuthUrl.toString() });
+  } catch (error) {
+    console.error('Twitter OAuth start error:', error);
+    res.status(500).json({ error: 'Failed to start Twitter OAuth' });
+  }
+});
+
+// Twitter OAuth callback
+app.get('/api/auth/twitter/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+
+    if (!code || !state) {
+      return res.status(400).json({ error: 'Missing code or state' });
+    }
+
+    // Retrieve OAuth state
+    const oauthData = oauthStore.get(state);
+    if (!oauthData) {
+      return res.status(400).json({ error: 'Invalid or expired state' });
+    }
+
+    const { verifier, userId } = oauthData;
+
+    // Exchange code for access token
+    const tokenResponse = await fetch('https://api.twitter.com/2/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${Buffer.from(
+          `${process.env.TWITTER_CLIENT_ID}:${process.env.TWITTER_CLIENT_SECRET}`
+        ).toString('base64')}`
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: process.env.TWITTER_CALLBACK_URL || 'http://localhost:5173/auth/twitter/callback',
+        code_verifier: verifier
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      console.error('Twitter token error:', errorText);
+      return res.status(500).json({ error: 'Failed to exchange code for token' });
+    }
+
+    const tokenData = await tokenResponse.json();
+
+    // Get user info from Twitter
+    const userResponse = await fetch('https://api.twitter.com/2/users/me', {
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`
+      }
+    });
+
+    if (!userResponse.ok) {
+      return res.status(500).json({ error: 'Failed to fetch Twitter user info' });
+    }
+
+    const twitterUser = await userResponse.json();
+
+    // Update user with Twitter info
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        twitterId: twitterUser.data.id,
+        twitterUsername: twitterUser.data.username,
+        twitterVerified: true,
+        twitterOAuthToken: tokenData.access_token // Encrypt in production
+      }
+    });
+
+    // Clean up OAuth state
+    oauthStore.delete(state);
+
+    // Redirect to frontend with success
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}?twitter=connected`);
+  } catch (error) {
+    console.error('Twitter OAuth callback error:', error);
+    res.status(500).json({ error: 'Twitter OAuth failed' });
   }
 });
 

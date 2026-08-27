@@ -95,6 +95,24 @@ function App() {
     }
   }
 
+  // Connect Twitter account
+  const connectTwitter = async () => {
+    if (!token) return
+
+    try {
+      const res = await fetch(`${API_URL}/api/auth/twitter/start`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (data.authUrl) {
+        window.location.href = data.authUrl
+      }
+    } catch (error) {
+      console.error('Twitter connection error:', error)
+      alert('Failed to start Twitter OAuth')
+    }
+  }
+
   // Apply for a job
   const applyForJob = async (jobId, coverLetter = '') => {
     if (!token) return
@@ -257,14 +275,30 @@ function App() {
           </div>
           <div className="flex items-center gap-4">
             {user && (
-              <div className="flex items-center gap-2">
-                <span className={`${currentRank.color} px-3 py-1 rounded-full text-sm font-bold`}>
-                  {currentRank.emoji} {currentRank.name}
-                </span>
-                <span className="text-jungle-green-400 font-bold">
-                  {user.totalEarnings.toFixed(4)} SOL
-                </span>
-              </div>
+              <>
+                {!user.twitterVerified && (
+                  <button
+                    onClick={connectTwitter}
+                    className="text-sm bg-blue-500 hover:bg-blue-600 px-4 py-2 rounded-lg font-bold transition-all"
+                  >
+                    🔗 Connect X
+                  </button>
+                )}
+                {user.twitterVerified && (
+                  <div className="flex items-center gap-2 text-sm bg-blue-500/20 px-4 py-2 rounded-lg">
+                    <span>✅</span>
+                    <span>{user.twitterUsername}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className={`${currentRank.color} px-3 py-1 rounded-full text-sm font-bold`}>
+                    {currentRank.emoji} {currentRank.name}
+                  </span>
+                  <span className="text-jungle-green-400 font-bold">
+                    {user.totalEarnings.toFixed(4)} SOL
+                  </span>
+                </div>
+              </>
             )}
             <div className="text-sm bg-ape-brown-700 px-4 py-2 rounded-lg">
               {user?.walletAddress.slice(0, 4)}...{user?.walletAddress.slice(-4)}
